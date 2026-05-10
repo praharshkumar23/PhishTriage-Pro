@@ -1,7 +1,0 @@
-{
-  "domains": [
-    "known-phish-example.tk",
-    "amaz0n-secure.ml"
-  ],
-  "notes": "Add known malicious domains here for offline cache checks."
-}
