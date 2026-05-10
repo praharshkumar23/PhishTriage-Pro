@@ -1,0 +1,19 @@
+From: Amazon Billing <notice@amaz0n-verify.tk>
+Reply-To: reset@amaz0n-verify.tk
+Subject: Urgent: verify your password now
+Received-SPF: fail
+https://amaz0n-verify.tk/login
+
+---
+
+From: HR Team <hr@company.com>
+Reply-To: hr@company.com
+Subject: Policy update for all employees
+
+---
+
+From: Microsoft Security <alert@microsoft-login-support.xyz>
+Reply-To: noreply@microsoft-login-support.xyz
+Subject: Unusual sign-in detected — action required
+DKIM=fail
+https://microsoft-login-support.xyz/signin

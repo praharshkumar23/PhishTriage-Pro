@@ -1,0 +1,12 @@
+{
+  "incident_id": "INC-2026-0042",
+  "url": "http://amaz0n-verify.tk/login",
+  "users_targeted": 45,
+  "users_clicked": [
+    "john@company.com",
+    "sarah@company.com",
+    "mark@company.com"
+  ],
+  "department": "HR department",
+  "assigned_to": "L2 Analyst"
+}
