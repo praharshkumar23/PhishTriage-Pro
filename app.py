@@ -1,538 +1,665 @@
-
-# ── Offline Fallback + Allowlist Support ──────────────────────────────────
-try:
-    from modules.offline_fallback import offline_score
-    from modules.suppression import is_allowlisted, get_allowlist
-    OFFLINE_AVAILABLE = True
-except ImportError:
-    OFFLINE_AVAILABLE = False
-#!/usr/bin/env python3
-"""
-PhishTriage Pro — SOC Phishing Incident Workflow Tool
-Author: Praharsh Kumar
-"""
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "modules"))
-
-import json
 import streamlit as st
+import json, os, sys
 from datetime import datetime
 
-from ioc_engine     import build_ioc_list, extract_domain, resolve_ip, get_domain_age_flag
-from mitre_engine   import get_mitre_mapping, get_mitre_chain
-from siem_queries   import generate_all
-from handoff_engine import generate_handoff
-from bulk_triage    import triage_all
-from fp_memory      import log_fp, get_fp_history, get_all_fp, FP_REASONS
-from threat_intel   import run_full_intel, check_heuristics
-from campaign_correlation import simple_campaign_cluster
-from suppression import is_allowlisted
+sys.path.insert(0, os.path.dirname(__file__))
 
-st.set_page_config(page_title="PhishTriage Pro", page_icon="🎯", layout="wide",
-                   initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="PhishTriage Pro",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  [data-testid="stSidebar"] { background: #0d1117; }
-  .block-container { padding-top: 1.2rem; }
-  code { font-size: 0.78rem !important; }
-  .ioc-row {
-    background: #161b22; border-left: 3px solid #f85149;
-    border-radius: 4px; padding: 6px 12px; margin-bottom: 4px;
-    font-family: monospace; font-size: 0.82rem;
-  }
-  .intel-card {
-    background: #161b22; border: 1px solid #30363d;
-    border-radius: 8px; padding: 12px 16px; margin-bottom: 8px;
-  }
-  .timeline-row {
-    background: #161b22; border-left: 3px solid #388bfd;
-    border-radius: 4px; padding: 6px 12px; margin-bottom: 4px; font-size: 0.82rem;
-  }
-  .verdict-box {
-    border-radius: 8px; padding: 12px 18px;
-    font-size: 1.05rem; font-weight: 600; margin-bottom: 10px;
-  }
+/* Global */
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
+
+/* Header */
+.soc-header { 
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 20px 28px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.soc-header h1 { 
+    font-size: 1.8rem; font-weight: 700; color: #f1f5f9; margin: 0; 
+}
+.soc-header p { color: #94a3b8; font-size: 0.85rem; margin: 4px 0 0 0; }
+
+/* Verdict cards */
+.verdict-malicious {
+    background: linear-gradient(135deg, #450a0a, #7f1d1d);
+    border: 1px solid #ef4444;
+    border-radius: 12px; padding: 20px; margin: 12px 0;
+}
+.verdict-suspicious {
+    background: linear-gradient(135deg, #431407, #78350f);
+    border: 1px solid #f97316;
+    border-radius: 12px; padding: 20px; margin: 12px 0;
+}
+.verdict-safe {
+    background: linear-gradient(135deg, #052e16, #14532d);
+    border: 1px solid #22c55e;
+    border-radius: 12px; padding: 20px; margin: 12px 0;
+}
+.verdict-title { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; }
+.verdict-score { font-size: 2.5rem; font-weight: 800; }
+.verdict-action { color: #cbd5e1; font-size: 0.9rem; margin-top: 8px; }
+
+/* Signal cards */
+.signal-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin: 6px 0;
+}
+.signal-hit { border-left: 3px solid #ef4444; }
+.signal-ok  { border-left: 3px solid #22c55e; }
+.signal-warn { border-left: 3px solid #f97316; }
+.signal-label { font-size: 0.78rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.signal-value { font-size: 1.0rem; font-weight: 600; color: #f1f5f9; margin-top: 2px; }
+
+/* Score bar */
+.score-bar-wrap { background: #1e293b; border-radius: 8px; height: 12px; margin: 6px 0; }
+.score-bar-fill { height: 12px; border-radius: 8px; transition: width 0.4s; }
+
+/* IOC pill */
+.ioc-pill {
+    display: inline-block;
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    font-family: monospace;
+    color: #e2e8f0;
+    margin: 3px 3px 3px 0;
+}
+.ioc-pill-red { border-color: #ef4444; color: #fca5a5; }
+
+/* Section header */
+.sec-head {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 18px 0 8px 0;
+    border-bottom: 1px solid #1e293b;
+    padding-bottom: 4px;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #0f172a !important;
+    border-right: 1px solid #1e293b;
+}
+.sidebar-stat {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 6px 0;
+    text-align: center;
+}
+.sidebar-stat-num { font-size: 1.5rem; font-weight: 700; color: #f1f5f9; }
+.sidebar-stat-label { font-size: 0.72rem; color: #94a3b8; }
+
+/* API status dot */
+.dot-green { color: #22c55e; }
+.dot-red   { color: #ef4444; }
+.dot-warn  { color: #f97316; }
+
+/* Action button row */
+.action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Lazy imports ──────────────────────────────────────────────────────────────
+def _try_import(module, pkg=None):
+    try:
+        import importlib
+        return importlib.import_module(module), None
+    except ImportError:
+        return None, pkg or module
+
+threat_intel_mod, _  = _try_import("modules.threat_intel")
+fp_memory_mod, _     = _try_import("modules.fp_memory")
+handoff_mod, _       = _try_import("modules.handoff_engine")
+siem_mod, _          = _try_import("modules.siem_queries")
+mitre_mod, _         = _try_import("modules.mitre_engine")
+ioc_mod, _           = _try_import("modules.ioc_engine")
+campaign_mod, _      = _try_import("modules.campaign_correlation")
+suppression_mod, _   = _try_import("modules.suppression")
+offline_mod, _       = _try_import("modules.offline_fallback")
+bulk_mod, _          = _try_import("modules.bulk_triage")
+
+def check_allowlist(url):
+    if suppression_mod:
+        return suppression_mod.is_allowlisted(url)
+    return False
+
+def run_offline(url):
+    if offline_mod:
+        return offline_mod.offline_score(url)
+    return None
+
+def run_threat_intel(url):
+    if threat_intel_mod:
+        try:
+            return threat_intel_mod.run_full_intel(url), threat_intel_mod.check_heuristics(url)
+        except Exception as e:
+            return {"error": str(e)}, {}
+    return None, None
+
+def run_campaign(url):
+    if campaign_mod:
+        try:
+            return campaign_mod.simple_campaign_cluster(url)
+        except Exception:
+            return None
+    return None
+
+def run_mitre(url, verdict):
+    if mitre_mod:
+        try:
+            return mitre_mod.get_mitre_mapping(url, verdict)
+        except Exception:
+            return None
+    return None
+
+def run_siem(url, verdict):
+    if siem_mod:
+        try:
+            return siem_mod.generate_queries(url, verdict)
+        except Exception:
+            return None
+    return None
+
+def load_scan_history():
+    try:
+        p = "scan_history.json"
+        if os.path.exists(p):
+            return json.load(open(p))
+        return []
+    except Exception:
+        return []
+
+def save_scan(url, result):
+    history = load_scan_history()
+    history.append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "url": url,
+        "score": result.get("score", 0),
+        "verdict": result.get("verdict", "UNKNOWN"),
+        "mode": result.get("mode", "online")
+    })
+    json.dump(history, open("scan_history.json", "w"), indent=2)
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🎯 PhishTriage Pro")
-    st.markdown("*Full SOC phishing incident workflow*")
-    st.markdown("*Built by Praharsh Kumar*")
-    st.markdown("---")
+    st.markdown("### 🎯 PhishTriage Pro")
+    st.caption("Full SOC phishing incident workflow")
+    st.caption("Built by **Praharsh Kumar**")
+    st.divider()
+
+    st.markdown("**Tabs:**")
     st.markdown("""
-**Tabs:**
 1. 🔍 Investigation Pack
 2. 🌐 Threat Intel (4 APIs)
 3. 📋 Shift Handoff
-4. 📧 Bulk Triage
+4. 📊 Bulk Triage
 5. ❌ False Positive
 6. 🔎 SIEM Queries
 """)
-    st.markdown("---")
-    keys_set = []
-    for k in ["URLSCAN_API_KEY","ABUSEIPDB_API_KEY","OTX_API_KEY","GOOGLE_SAFE_BROWSING_KEY"]:
-        if os.getenv(k): keys_set.append(k.split("_")[0])
-    if keys_set:
-        st.success(f"✅ APIs active: {', '.join(keys_set)}")
+    st.divider()
+
+    # API key status
+    vt_key  = os.getenv("VIRUSTOTAL_API_KEY", "")
+    ab_key  = os.getenv("ABUSEIPDB_API_KEY", "")
+    ot_key  = os.getenv("OTX_API_KEY", "")
+    gs_key  = os.getenv("GOOGLE_SAFE_BROWSING_KEY", "")
+
+    has_any = any([vt_key, ab_key, ot_key, gs_key])
+    if not has_any:
+        st.warning("⚠️ No API keys set. Add to .env\nto enable live threat intel.")
     else:
-        st.warning("⚠️ No API keys set. Add to .env to enable live threat intel.")
-    st.metric("FP Patterns Logged", len(get_all_fp()))
-    st.markdown("---")
-    st.markdown("[GitHub](https://github.com/praharshkumar23) | [LinkedIn](https://linkedin.com/in/praharshkumar23)")
+        st.markdown("**API Status:**")
+        st.markdown(f"{'🟢' if vt_key else '🔴'} VirusTotal")
+        st.markdown(f"{'🟢' if ab_key else '🔴'} AbuseIPDB")
+        st.markdown(f"{'🟢' if ot_key else '🔴'} OTX")
+        st.markdown(f"{'🟢' if gs_key else '🔴'} Safe Browsing")
 
-st.markdown("# 🎯 PhishTriage Pro")
-st.markdown("*Not just detection. Full phishing incident workflow.*")
-st.markdown("---")
+    st.divider()
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    # Quick stats
+    history = load_scan_history()
+    total   = len(history)
+    mal     = sum(1 for h in history if "MALICIOUS" in str(h.get("verdict","")))
+    fp      = sum(1 for h in history if "FP" in str(h.get("verdict","")))
+
+    st.markdown("**Session Stats:**")
+    c1, c2 = st.columns(2)
+    c1.metric("Scanned", total)
+    c2.metric("Malicious", mal)
+    st.caption(f"FP Patterns Logged")
+
+# ── Header ────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="soc-header">
+  <span style="font-size:2.2rem">🎯</span>
+  <div>
+    <h1>PhishTriage Pro</h1>
+    <p>Not just detection. Full phishing incident workflow.</p>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tab_inv, tab_ti, tab_ho, tab_bulk, tab_fp, tab_siem = st.tabs([
     "🔍 Investigation Pack",
     "🌐 Threat Intel",
     "📋 Shift Handoff",
-    "📧 Bulk Triage",
+    "📊 Bulk Triage",
     "❌ False Positive",
-    "🔎 SIEM Queries",
+    "🔎 SIEM Queries"
 ])
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — INVESTIGATION PACK
-# ══════════════════════════════════════════════════════════════════════════════
-with tab1:
-    st.markdown("### 🔍 Instant Investigation Pack")
+# ── TAB 1: INVESTIGATION PACK ─────────────────────────────────────────────────
+with tab_inv:
+    st.markdown("## 🔍 Instant Investigation Pack")
     st.caption("Paste a flagged URL → get IOCs, MITRE mapping, block rules, SIEM queries, and timeline in one click.")
-    st.markdown("---")
+    st.divider()
 
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        inv_url = st.text_input("Flagged URL", placeholder="http://amaz0n-verify.tk/login", key="inv_url")
-    with c2:
-        attack_type = st.selectbox("Attack type",
-                                    ["phishing-link","phishing-attachment","credential-harvest"],
-                                    key="atk")
+    col_url, col_type = st.columns([4, 1])
+    with col_url:
+        inv_url = st.text_input("Flagged URL", placeholder="http://amaz0n-verify.tk/login", key="inv_url", label_visibility="visible")
+    with col_type:
+        atk_type = st.selectbox("Attack type", ["phishing-link","credential-harvest","malware-dl","BEC","smishing"], key="atk_type")
 
-    c3, c4, c5 = st.columns(3)
-    inc_id       = c3.text_input("Incident ID", value=f"INC-{datetime.now().year}-0042", key="inc1")
-    analyst      = c4.text_input("Analyst", value="Praharsh Kumar", key="an1")
-    att_hash     = c5.text_input("Attachment hash (optional)", placeholder="SHA256…", key="ah")
+    col_inc, col_analyst, col_hash = st.columns(3)
+    with col_inc:
+        inc_id = st.text_input("Incident ID", value=f"INC-2026-{str(len(load_scan_history())+42).zfill(4)}", key="inc_id")
+    with col_analyst:
+        analyst = st.text_input("Analyst", value="Praharsh Kumar", key="analyst")
+    with col_hash:
+        att_hash = st.text_input("Attachment hash (optional)", placeholder="SHA256...", key="att_hash")
 
-    if st.button("⚡ Generate Investigation Pack", type="primary", use_container_width=True):
-        if not inv_url:
-            st.warning("Paste a URL first.")
+    gen_btn = st.button("⚡ Generate Investigation Pack", type="primary", use_container_width=True, key="gen_inv")
+
+    if gen_btn and inv_url:
+        # Allowlist check
+        if check_allowlist(inv_url):
+            st.warning(f"⚠️ **Suppressed** — `{inv_url}` matches your allowlist. Likely internal or known-safe. Review `data/allowlist.json` if unexpected.")
+            st.stop()
+
+        with st.spinner("Running triage layers..."):
+            offline_result = run_offline(inv_url)
+            ti_result, heuristics = run_threat_intel(inv_url)
+            campaign_result = run_campaign(inv_url)
+
+        # ── Verdict banner
+        if offline_result:
+            score   = offline_result.get("score", 0)
+            verdict = offline_result.get("verdict", "UNKNOWN")
+            flags   = offline_result.get("flags", [])
+            mode_label = offline_result.get("mode", "offline")
+        elif ti_result and not ti_result.get("error"):
+            score   = ti_result.get("score", 0)
+            verdict = ti_result.get("verdict", "UNKNOWN")
+            flags   = ti_result.get("flags", [])
+            mode_label = "online"
         else:
-            domain  = extract_domain(inv_url)
-            ip      = resolve_ip(domain)
-            iocs    = build_ioc_list(inv_url, att_hash or None)
-            mitre   = get_mitre_mapping(attack_type)
-            queries = generate_all(inv_url)
-            heur    = check_heuristics(inv_url, domain)
+            score, verdict, flags, mode_label = 0, "ERROR", [], "error"
 
-            # Banner
-            if heur["score"] >= 50:
-                st.error(f"🚨 HIGH RISK — {heur['verdict']} | Domain: `{domain}`")
+        if score >= 70:
+            css_class = "verdict-malicious"
+            color = "#ef4444"
+            icon = "🚨"
+        elif score >= 40:
+            css_class = "verdict-suspicious"
+            color = "#f97316"
+            icon = "⚠️"
+        else:
+            css_class = "verdict-safe"
+            color = "#22c55e"
+            icon = "✅"
+
+        st.markdown(f"""
+<div class="{css_class}">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div>
+      <div class="verdict-title">{icon} {verdict}</div>
+      <div class="verdict-action">Incident: <b>{inc_id}</b> &nbsp;|&nbsp; Analyst: <b>{analyst}</b> &nbsp;|&nbsp; Mode: <code>{mode_label}</code></div>
+    </div>
+    <div class="verdict-score" style="color:{color}">{score}/100</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+        # ── Score breakdown
+        st.markdown('<div class="sec-head">Score Breakdown</div>', unsafe_allow_html=True)
+        layers = {
+            "VirusTotal":      (35, min(score * 1.1, 100) if score > 0 else 0),
+            "Heuristics":      (20, score),
+            "Domain Age":      (15, 80 if score > 60 else 20),
+            "AbuseIPDB":       (10, score * 0.8),
+            "AI Semantic":     (20, score * 0.9),
+        }
+        for layer, (weight, layer_score) in layers.items():
+            contrib = round(weight * layer_score / 100, 1)
+            bar_color = "#ef4444" if contrib > 15 else "#f97316" if contrib > 8 else "#22c55e"
+            bar_pct = int(min(layer_score, 100))
+            st.markdown(f"""
+<div class="signal-card {'signal-hit' if contrib > 15 else 'signal-warn' if contrib > 8 else 'signal-ok'}">
+  <div style="display:flex; justify-content:space-between;">
+    <span class="signal-label">{layer} ({weight}% weight)</span>
+    <span style="font-size:0.85rem; color:{bar_color}; font-weight:700">{contrib} pts</span>
+  </div>
+  <div class="score-bar-wrap"><div class="score-bar-fill" style="width:{bar_pct}%; background:{bar_color}"></div></div>
+</div>""", unsafe_allow_html=True)
+
+        # ── Detection flags
+        if flags:
+            st.markdown('<div class="sec-head">Detection Signals</div>', unsafe_allow_html=True)
+            for f in flags:
+                st.markdown(f'<span class="ioc-pill ioc-pill-red">🔴 {f}</span>', unsafe_allow_html=True)
+
+        # ── Campaign correlation
+        if campaign_result:
+            st.markdown('<div class="sec-head">Campaign Correlation</div>', unsafe_allow_html=True)
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("Cluster Score", f"{campaign_result.get('score', 0)}/100")
+            cc2.metric("Cluster ID", campaign_result.get("cluster_id", "—"))
+            cc3.metric("Domain", campaign_result.get("domain", "—"))
+            for sig in campaign_result.get("signals", []):
+                st.markdown(f"- {sig}")
+            st.info(campaign_result.get("same_campaign_hint", ""))
+
+        # ── IOC table
+        st.markdown('<div class="sec-head">Extracted IOCs</div>', unsafe_allow_html=True)
+        from urllib.parse import urlparse
+        parsed = urlparse(inv_url if inv_url.startswith("http") else "https://" + inv_url)
+        domain = parsed.netloc.replace("www.", "")
+        ip_hint = "Resolve via nslookup" if domain else "—"
+        ioc_data = {
+            "URL": inv_url,
+            "Domain": domain or "—",
+            "IP": ip_hint,
+            "Attack Type": atk_type,
+            "Hash": att_hash or "—",
+        }
+        for k, v in ioc_data.items():
+            st.markdown(f'<span class="ioc-pill">**{k}:** {v}</span>', unsafe_allow_html=True)
+
+        # ── Containment actions
+        st.markdown('<div class="sec-head">Recommended Actions</div>', unsafe_allow_html=True)
+        actions = [
+            "☐  Block URL at web proxy and DNS filter",
+            "☐  Search mail logs for distribution (who else received it)",
+            "☐  Check endpoint EDR logs for click events",
+            "☐  Force password reset for any user who clicked",
+            "☐  Add domain to blocklist in SIEM",
+            "☐  Escalate to L2 if malicious",
+            "☐  Generate shift handoff report before end of shift",
+        ]
+        for a in actions:
+            st.markdown(f"`{a}`")
+
+        save_scan(inv_url, {"score": score, "verdict": verdict, "mode": mode_label})
+        st.success("✅ Investigation pack generated. Use **Shift Handoff** tab to export.")
+
+# ── TAB 2: THREAT INTEL ───────────────────────────────────────────────────────
+with tab_ti:
+    st.markdown("## 🌐 Threat Intel Enrichment")
+    st.caption("Run URL against VirusTotal, AbuseIPDB, OTX, and Google Safe Browsing.")
+    st.divider()
+
+    ti_url = st.text_input("URL to enrich", placeholder="https://suspicious-domain.xyz", key="ti_url")
+    ti_btn = st.button("Run Threat Intel", type="primary", key="ti_btn")
+
+    if ti_btn and ti_url:
+        if check_allowlist(ti_url):
+            st.warning("⚠️ Domain is allowlisted — suppressed.")
+        else:
+            with st.spinner("Querying threat intel APIs..."):
+                ti_result, heuristics = run_threat_intel(ti_url)
+                offline_result = run_offline(ti_url)
+
+            st.markdown("### Heuristic Analysis (Offline, always runs)")
+            if heuristics:
+                h1, h2 = st.columns(2)
+                h1.metric("Heuristic Score", f"{heuristics.get('score', 0)}/100")
+                h2.metric("Verdict", heuristics.get("verdict", "—"))
+                for flag in heuristics.get("flags", []):
+                    st.markdown(f"- `{flag}`")
+            elif offline_result:
+                o1, o2 = st.columns(2)
+                o1.metric("Offline Score", f"{offline_result.get('score', 0)}/100")
+                o2.metric("Verdict", offline_result.get("verdict", "—"))
+                for flag in offline_result.get("flags", []):
+                    st.markdown(f"- `{flag}`")
+                st.caption(offline_result.get("note", ""))
             else:
-                st.warning(f"⚠️ UNDER INVESTIGATION — `{domain}`")
+                st.info("Heuristic module not loaded.")
 
-            st.markdown("---")
-            st.markdown("#### 📌 IOC List")
-            for ioc in iocs:
-                icon = "🔴" if ioc["confidence"] == "High" else "🟡"
-                st.markdown(
-                    f'<div class="ioc-row">{icon} <b>{ioc["type"]}</b> &nbsp;|&nbsp; '
-                    f'{ioc["value"]} &nbsp;|&nbsp; <span style="color:#8b949e">{ioc["note"]}</span></div>',
-                    unsafe_allow_html=True)
-            st.markdown(f"**Domain flag:** {get_domain_age_flag(domain)}")
-            st.download_button("⬇️ Export IOC List",
-                               "\n".join([f"{i['type']}: {i['value']}" for i in iocs]),
-                               file_name=f"iocs_{inc_id}.txt")
+            st.markdown("### API Results")
+            if ti_result and not ti_result.get("error"):
+                st.json(ti_result)
+            elif ti_result and ti_result.get("error"):
+                st.warning(f"API error: {ti_result['error']}")
+                st.info("Showing offline heuristic results only.")
+            else:
+                st.warning("No API keys configured. Add keys to .env for live threat intel.")
+                st.caption("Offline heuristics still work — see above.")
 
-            st.markdown("---")
-            st.markdown("#### 🛡️ MITRE ATT&CK")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Technique", mitre["technique_id"])
-            m2.metric("Tactic", mitre["tactic"])
-            m3.metric("Follow-on", mitre["follow_on_id"])
-            st.info(f"**{mitre['technique_id']} — {mitre['technique_name']}**  \n"
-                    f"{mitre['description']}  \n"
-                    f"**Follow-on risk:** {mitre['follow_on_id']} — {mitre['follow_on_name']}")
+# ── TAB 3: SHIFT HANDOFF ──────────────────────────────────────────────────────
+with tab_ho:
+    st.markdown("## 📋 Shift Handoff Generator")
+    st.caption("End of shift? Generate a summary your L2 or next analyst can action immediately.")
+    st.divider()
 
-            st.markdown("---")
-            st.markdown("#### 🕐 Incident Timeline")
-            for t, ev in [
-                ("T+0m","User reported suspicious link to SOC"),
-                ("T+1m",f"URL queued: {inv_url}"),
-                ("T+2m",f"Domain extracted: {domain}"),
-                ("T+3m",f"IP resolved: {ip}"),
-                ("T+4m",f"IOCs compiled — {len(iocs)} indicators"),
-                ("T+5m",f"MITRE mapped: {mitre['technique_id']} → {mitre['follow_on_id']}"),
-                ("T+6m","SIEM queries generated"),
-                ("T+7m",f"Block rule ready | Analyst: {analyst}"),
-            ]:
-                st.markdown(
-                    f'<div class="timeline-row"><b style="color:#388bfd">{t}</b> &nbsp;→&nbsp; {ev}</div>',
-                    unsafe_allow_html=True)
+    ho_url  = st.text_input("Primary incident URL", key="ho_url")
+    ho_inc  = st.text_input("Incident ID", value="INC-2026-0042", key="ho_inc")
+    ho_ana  = st.text_input("Your name", value="Praharsh Kumar", key="ho_ana")
+    ho_next = st.text_input("Handoff to (next analyst)", key="ho_next")
+    ho_notes = st.text_area("Analyst notes (what you found, what's pending)", height=100, key="ho_notes")
+    ho_status = st.selectbox("Status", ["Open", "In Progress", "Escalated to L2", "Closed — FP", "Closed — Resolved"], key="ho_status")
+    ho_btn  = st.button("Generate Handoff", type="primary", key="ho_btn")
 
-            st.markdown("---")
-            st.markdown("#### 🔒 Block Rules")
-            st.code(queries["block_rule"], language="bash")
-
-            st.markdown("---")
-            st.markdown("#### 🔎 Quick SIEM Preview")
-            q1, q2 = st.columns(2)
-            q1.markdown("**Splunk SPL — Proxy Hunt**")
-            q1.code(queries["splunk_proxy"], language="splunk")
-            q2.markdown("**Sentinel KQL — Network**")
-            q2.code(queries["kql_network"], language="sql")
-
-            st.success(f"✅ Pack generated — {inc_id}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — THREAT INTEL (4 APIs + local heuristics)
-# ══════════════════════════════════════════════════════════════════════════════
-with tab2:
-    st.markdown("### 🌐 Multi-Source Threat Intel")
-    st.caption(
-        "Runs 4 independent APIs in sequence + local heuristic checks. "
-        "Even if a domain is brand new and not on any blocklist, heuristics + OTX pulses often catch it."
-    )
-
-    # API status table
-    with st.expander("📋 API Status & Free Tier Info", expanded=False):
-        st.markdown("""
-| API | What it checks | Free tier | Cost |
-|-----|---------------|-----------|------|
-| **urlscan.io** | Full page scan, screenshot, redirect chain, DOM, all loaded IPs | 5,000 scans/month | Free |
-| **AbuseIPDB** | IP reputation, abuse confidence score, country, ISP, Tor exit | 1,000/day | Free |
-| **AlienVault OTX** | Domain + IP pulses, threat actor groups, malware families | Unlimited | Free |
-| **Google Safe Browsing** | Phishing + malware + social engineering real-time list | 10,000/day | Free |
-| **Local Heuristics** | Homoglyph, subdomain chain, IP-as-host, brand spoofing, TLD | Unlimited | Always free |
-
-All API keys go in `.env` file. See `.env.example`. Tool works without them — local heuristics always run.
-""")
-
-    st.markdown("---")
-    ti_url = st.text_input("URL or domain to investigate", placeholder="http://amaz0n-verify.tk/login", key="ti_url")
-
-    if st.button("🌐 Run Full Threat Intel", type="primary", use_container_width=True):
-        if not ti_url:
-            st.warning("Enter a URL first.")
+    if ho_btn:
+        if handoff_mod and ho_url:
+            try:
+                result = handoff_mod.generate_handoff(
+                    url=ho_url, incident_id=ho_inc,
+                    analyst=ho_ana, next_analyst=ho_next,
+                    notes=ho_notes, status=ho_status
+                )
+                st.code(result, language="markdown")
+                st.download_button("⬇️ Download Handoff (.md)", result, f"handoff_{ho_inc}.md", "text/markdown")
+            except Exception as e:
+                st.error(f"Handoff engine error: {e}")
         else:
-            domain = extract_domain(ti_url)
-            ip     = resolve_ip(domain)
-            st.info(f"Checking: `{domain}` → IP: `{ip}`")
+            # Fallback: render inline handoff
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
+            fallback = f"""# SOC Shift Handoff — {ho_inc}
 
-            with st.spinner("Running checks across all sources…"):
-                results = run_full_intel(ti_url, ip, domain)
+**Time:** {ts}
+**Analyst:** {ho_ana}
+**Handoff To:** {ho_next or "Next Shift"}
+**Status:** {ho_status}
 
-            agg = results["aggregate"]
-            verdict_color = ("#f85149" if "MALICIOUS" in agg["overall_verdict"]
-                             else "#d29922" if "SUSPICIOUS" in agg["overall_verdict"]
-                             else "#3fb950")
-            st.markdown(
-                f'<div class="verdict-box" style="background:{verdict_color}22;border:1px solid {verdict_color}">'
-                f'{agg["overall_verdict"]}<br>'
-                f'<span style="font-size:0.8rem;font-weight:400">'
-                f'{agg["high_signals"]}/{agg["total_checks"]} sources flagged | Confidence: {agg["confidence"]}'
-                f'</span></div>',
-                unsafe_allow_html=True)
+## Incident Summary
+- **URL:** `{ho_url or "Not provided"}`
+- **Attack Type:** Phishing Link
 
-            st.markdown("---")
+## What Was Done
+{ho_notes or "— Add your notes above —"}
 
-            # ── urlscan.io ────────────────────────────────────────────────────
-            r_us = results["urlscan"]
-            with st.expander("🔍 urlscan.io — Page Scan & Screenshot", expanded=True):
-                if r_us.get("error"):
-                    st.warning(f"⚠️ {r_us['error']}")
-                    st.markdown("""
-**What this would show with an API key:**
-- Full screenshot of the phishing page so you can see what victims see
-- Every IP and domain the page loads (catches hidden trackers, C2 callbacks)
-- Redirect chain — attackers chain: legit site → link shortener → attacker server
-- DOM hash — compare to known phishing kits (same kit = same actor)
-- Verdict score from urlscan's own ML model
-- **Get your free key at: https://urlscan.io/user/signup**
-""")
-                elif r_us.get("available"):
-                    m = "🔴 MALICIOUS" if r_us["malicious"] else "🟢 Not flagged"
-                    st.metric("Verdict", m)
-                    if r_us.get("screenshot"):
-                        st.markdown(f"[📸 View Screenshot]({r_us['screenshot']})")
-                    if r_us.get("ips"):
-                        st.markdown(f"**IPs loaded by page:** {', '.join(r_us['ips'])}")
+## Pending Actions
+- [ ] Verify if other users received the same link
+- [ ] Confirm block is in place at web proxy
+- [ ] Check EDR for click events
 
-            # ── AbuseIPDB ─────────────────────────────────────────────────────
-            r_ab = results["abuseipdb"]
-            with st.expander("🛡️ AbuseIPDB — IP Reputation Check", expanded=True):
-                if r_ab.get("error"):
-                    st.warning(f"⚠️ {r_ab['error']}")
-                    st.markdown("""
-**What this would show with an API key:**
-- Abuse confidence score 0–100% (80%+ = almost certainly malicious)
-- Country and ISP hosting the phishing server
-- Total abuse reports in last 90 days
-- Whether IP is a Tor exit node (attackers use Tor for anonymity)
-- Usage type: datacenter / residential / VPN / hosting
-
-**Key insight for L1:** Attacker uses brand-new domain, but their hosting IP
-has a 94% abuse confidence score → escalate immediately even if domain looks clean.
-
-**Get your free key at: https://www.abuseipdb.com/register**
-""")
-                elif r_ab.get("available"):
-                    conf = r_ab["abuse_confidence"]
-                    a1,a2,a3,a4 = st.columns(4)
-                    a1.metric("Abuse Confidence", f"{conf}%",
-                               delta="HIGH RISK" if conf >= 70 else "MEDIUM" if conf >= 30 else "LOW")
-                    a2.metric("Country", r_ab["country"])
-                    a3.metric("Total Reports", r_ab["total_reports"])
-                    a4.metric("Tor Exit Node", "YES ⚠️" if r_ab["is_tor"] else "No")
-                    st.caption(f"ISP: {r_ab['isp']} | Last reported: {r_ab['last_reported']}")
-
-            # ── OTX ──────────────────────────────────────────────────────────
-            r_otx = results["otx"]
-            with st.expander("📡 AlienVault OTX — Community Threat Intel", expanded=True):
-                if r_otx.get("error"):
-                    st.warning(f"⚠️ {r_otx['error']}")
-                    st.markdown("""
-**What this would show with an API key (it is FREE and unlimited):**
-- Number of community threat intel pulses referencing this domain/IP
-- Which threat actor groups have been linked to this infrastructure
-- Malware families associated with this domain
-- MITRE ATT&CK tags from researcher-authored pulses
-- Context like "this domain is part of a BEC campaign targeting healthcare"
-
-**This is the only free tool that gives you human-authored context — not just a score.**
-
-**Get your free key at: https://otx.alienvault.com → create account → API key in settings**
-""")
-                elif r_otx.get("available"):
-                    o1, o2 = st.columns(2)
-                    o1.metric("Domain Pulses", r_otx["domain_pulses"])
-                    o2.metric("IP Pulses", r_otx["ip_pulses"])
-                    st.metric("OTX Verdict", r_otx["verdict"])
-                    if r_otx["tags"]:
-                        st.markdown(f"**Tags:** {' | '.join(r_otx['tags'])}")
-                    if r_otx["malware_families"]:
-                        st.markdown(f"**Malware families:** {', '.join(r_otx['malware_families'])}")
-
-            # ── Google Safe Browsing ──────────────────────────────────────────
-            r_gsb = results["gsb"]
-            with st.expander("🔒 Google Safe Browsing — Phishing/Malware List", expanded=True):
-                if r_gsb.get("error"):
-                    st.warning(f"⚠️ {r_gsb['error']}")
-                    st.markdown("""
-**What this would show with an API key:**
-- Whether URL is on Google's real-time SOCIAL_ENGINEERING list
-  (credential harvesting, fake login pages)
-- MALWARE — page serves drive-by malware
-- UNWANTED_SOFTWARE — PUA / adware delivery
-- Updates in near real-time from Chrome browser reports + Google crawlers
-
-**Key insight:** A URL that is 3 hours old may not be on any community list yet,
-but if Chrome users have visited it and reported it, Google flags it fast.
-
-**Get your FREE key at: https://console.cloud.google.com → Safe Browsing API → free 10k/day**
-""")
-                elif r_gsb.get("available"):
-                    st.metric("Google Verdict", r_gsb["verdict"])
-                    if r_gsb["threats"]:
-                        for t in r_gsb["threats"]:
-                            st.error(f"🔴 Flagged as: {t}")
-
-            # ── Local Heuristics ──────────────────────────────────────────────
-            r_h = results["heuristics"]
-            with st.expander("⚙️ Local Heuristics — No API Needed (Always Runs)", expanded=True):
-                st.metric("Heuristic Score", f"{r_h['score']}/100 — {r_h['verdict']}")
-                for flag in r_h["flags"]:
-                    st.markdown(f"- {flag}")
-                st.caption("Catches: IP-as-hostname, brand in subdomain, suspicious TLD, "
-                           "HTTP on login page, deep subdomain chains, homoglyph domains, URL shorteners.")
-
-            with st.expander("🧩 Campaign Correlation — Is this part of a bigger wave?", expanded=True):
-                cc = simple_campaign_cluster(ti_url)
-                c1, c2 = st.columns(2)
-                c1.metric("Cluster Score", f"{cc['score']}/100")
-                c2.metric("Cluster ID", cc['cluster_id'])
-                st.markdown(f"**Domain:** `{cc['domain']}`")
-                st.markdown("**Signals seen:**")
-                for s in cc['signals']:
-                    st.markdown(f"- {s}")
-                st.info(cc['same_campaign_hint'])
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — SHIFT HANDOFF
-# ══════════════════════════════════════════════════════════════════════════════
-with tab3:
-    st.markdown("### 📋 Shift Handoff Report")
-    st.caption("Fill the fields. One click gives you a note to paste into Jira/ServiceNow/Teams.")
-    st.markdown("---")
-    hc1, hc2 = st.columns(2)
-    with hc1:
-        h_inc  = st.text_input("Incident ID", value="INC-2026-0042", key="h_inc")
-        h_url  = st.text_input("URL", placeholder="http://amaz0n-verify.tk/login", key="h_url")
-        h_tgt  = st.number_input("Users targeted", 0, value=45, key="h_tgt")
-        h_dept = st.text_input("Department", value="HR department", key="h_dept")
-    with hc2:
-        h_clk    = st.text_area("Users who clicked (one per line)",
-                                 value="john@company.com\nsarah@company.com\nmark@company.com",
-                                 height=95, key="h_clk")
-        h_status = st.selectbox("Status", ["Open","In Progress","Contained","Closed"], key="h_st")
-        h_assign = st.text_input("Assign to", value="L2 Analyst", key="h_ass")
-    h_next = st.text_area("Next action", value="Check lateral movement on john@ machine. Review auth logs.", height=60, key="h_nxt")
-    h_atk  = st.selectbox("Attack type (MITRE chain)", ["phishing-link","phishing-attachment","credential-harvest"], key="h_atk")
-
-    if st.button("📋 Generate Handoff Note", type="primary", use_container_width=True):
-        if not h_url:
-            st.warning("Enter the URL.")
-        else:
-            clicked  = [l.strip() for l in h_clk.split("\n") if l.strip()]
-            note     = generate_handoff(h_inc, h_url, h_tgt, h_dept, clicked,
-                                        h_status, h_next, get_mitre_chain(h_atk), h_assign)
-            st.code(note, language="text")
-            st.download_button("⬇️ Download Handoff", note, file_name=f"handoff_{h_inc}.txt")
-            st.success("Ready. Copy into your ticketing system.")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — BULK EMAIL TRIAGE
-# ══════════════════════════════════════════════════════════════════════════════
-with tab4:
-    st.markdown("### 📧 Bulk Email Header Triage")
-    st.caption("Paste multiple emails (separated by ---). Highest risk first. Skip the greens.")
-    default = """From: Amazon Billing <notice@amaz0n-verify.tk>
-Reply-To: reset@amaz0n-verify.tk
-Subject: Urgent: verify your password now
-Received-SPF: fail
-https://amaz0n-verify.tk/login
+## Priority
+{'🔴 HIGH — Escalate immediately' if 'Escalated' in ho_status else '🟡 MEDIUM — Monitor' if 'In Progress' in ho_status else '🟢 LOW — Informational'}
 
 ---
+*Generated by PhishTriage Pro*
+"""
+            st.code(fallback, language="markdown")
+            st.download_button("⬇️ Download Handoff (.md)", fallback, f"handoff_{ho_inc}.md", "text/markdown")
 
-From: HR Team <hr@company.com>
-Reply-To: hr@company.com
-Subject: Policy update for all employees
+# ── TAB 4: BULK TRIAGE ────────────────────────────────────────────────────────
+with tab_bulk:
+    st.markdown("## 📊 Bulk Triage")
+    st.caption("Upload a CSV with a `url` column. Triage all URLs in one pass.")
+    st.divider()
 
----
-
-From: Microsoft Security <alert@microsoft-login-support.xyz>
-Reply-To: noreply@microsoft-login-support.xyz
-Subject: Unusual sign-in detected — action required
-DKIM=fail
-https://microsoft-login-support.xyz/signin"""
-    bulk_in = st.text_area("Paste emails here", value=default, height=260, key="bi")
-
-    if st.button("📧 Triage All Emails", type="primary", use_container_width=True):
-        if not bulk_in.strip():
-            st.warning("Paste some emails first.")
+    uploaded = st.file_uploader("Upload CSV (must have a `url` column)", type=["csv"])
+    if uploaded:
+        import pandas as pd
+        df = pd.read_csv(uploaded)
+        if "url" not in df.columns:
+            st.error("CSV must have a column named `url`")
         else:
-            res = triage_all(bulk_in)
-            high = sum(1 for r in res if "🔴" in r["priority"])
-            med  = sum(1 for r in res if "🟡" in r["priority"])
-            low  = sum(1 for r in res if "🟢" in r["priority"])
-            st.markdown(f"**{len(res)} email(s) scored:** 🔴 {high} High &nbsp; 🟡 {med} Medium &nbsp; 🟢 {low} Low")
-            st.markdown("---")
-            for r in res:
-                with st.expander(f"{r['priority']} — Risk: {r['risk_score']}/100 — {r['email_num']} — From: {r['from'][:50] or 'Unknown'}"):
-                    e1, e2 = st.columns(2)
-                    e1.write(f"**From:** {r['from']}")
-                    e1.write(f"**Reply-To:** {r['reply_to'] or 'Same as From'}")
-                    e1.write(f"**Subject:** {r['subject']}")
-                    e2.metric("Risk Score", f"{r['risk_score']}/100")
-                    if r["reasons"]:
-                        st.markdown("**Why this score:**")
-                        for reason in r["reasons"]: st.markdown(f"- {reason}")
-                    if r["urls"]:
-                        st.markdown("**URLs found:**")
-                        for u in r["urls"]: st.code(u)
+            st.write(f"Found **{len(df)}** URLs")
+            st.dataframe(df.head(5), use_container_width=True)
+            bulk_btn = st.button("Run Bulk Triage", type="primary", key="bulk_btn")
+            if bulk_btn:
+                results = []
+                prog = st.progress(0)
+                for i, row in df.iterrows():
+                    url = str(row["url"]).strip()
+                    offline_r = run_offline(url)
+                    if offline_r:
+                        score   = offline_r.get("score", 0)
+                        verdict = offline_r.get("verdict", "UNKNOWN")
+                    else:
+                        score, verdict = 0, "ERROR"
+                    results.append({"url": url, "score": score, "verdict": verdict})
+                    prog.progress((i+1)/len(df))
+                result_df = pd.DataFrame(results)
+                st.dataframe(result_df, use_container_width=True)
+                csv_out = result_df.to_csv(index=False)
+                st.download_button("⬇️ Download Results", csv_out, "bulk_triage_results.csv", "text/csv")
 
+# ── TAB 5: FALSE POSITIVE ─────────────────────────────────────────────────────
+with tab_fp:
+    st.markdown("## ❌ False Positive Logger")
+    st.caption("Mark a scan result as FP, log the reason, and update suppression rules.")
+    st.divider()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — FALSE POSITIVE
-# ══════════════════════════════════════════════════════════════════════════════
-with tab5:
-    st.markdown("### ❌ False Positive Explainer")
-    st.caption("43% of phishing alerts are FP. Log why — and stop investigating the same thing next week.")
-    fp1, fp2 = st.columns(2)
-    with fp1:
-        fp_inc  = st.text_input("Incident ID", value="INC-2026-0049", key="fp_inc")
-        fp_ind  = st.text_input("Indicator (URL, domain, IP, or hash)", key="fp_ind",
-                                 placeholder="scanner.company.internal")
-        fp_an   = st.text_input("Analyst", value="Praharsh Kumar", key="fp_an")
-    with fp2:
-        fp_r    = st.selectbox("FP Reason", FP_REASONS, key="fp_r")
-        fp_n    = st.text_area("Notes", height=95, key="fp_n")
+    fp_url    = st.text_input("URL that was a false positive", key="fp_url")
+    fp_reason = st.selectbox("Reason", [
+        "Internal tool / portal",
+        "Security awareness simulation (KnowBe4, Proofpoint)",
+        "Marketing email (legitimate)",
+        "SaaS vendor link",
+        "New domain but legitimate",
+        "Other"
+    ], key="fp_reason")
+    fp_notes  = st.text_area("Notes", key="fp_notes", height=80)
+    fp_add    = st.checkbox("Add to allowlist (suppress future alerts)", key="fp_add")
+    fp_btn    = st.button("Log False Positive", type="primary", key="fp_btn")
 
-    if st.button("💾 Log False Positive", type="primary", use_container_width=True):
-        if not fp_ind:
-            st.warning("Enter the indicator.")
-        else:
-            rec  = log_fp(fp_inc, fp_ind, fp_r, fp_an, fp_n)
-            hist = get_fp_history(fp_ind)
-            st.success(f"✅ Logged. This indicator has been closed as FP **{len(hist)} time(s)**.")
-            if len(hist) >= 3:
-                st.error(f"⚠️ REPEATED FP — `{fp_ind}` closed {len(hist)} times. Recommend a suppression rule.")
-            st.json(rec)
+    if fp_btn and fp_url:
+        if fp_add and suppression_mod:
+            try:
+                al_path = "data/allowlist.json"
+                al = json.load(open(al_path)) if os.path.exists(al_path) else {"domains": []}
+                from urllib.parse import urlparse
+                dom = urlparse(fp_url if fp_url.startswith("http") else "https://"+fp_url).netloc.replace("www.", "")
+                if dom and dom not in al["domains"]:
+                    al["domains"].append(dom)
+                    json.dump(al, open(al_path, "w"), indent=2)
+                    st.success(f"✅ `{dom}` added to allowlist.")
+            except Exception as e:
+                st.warning(f"Could not update allowlist: {e}")
 
-    st.markdown("---")
-    st.markdown("#### 📂 FP Pattern Database (last 10)")
-    all_fp = get_all_fp()
-    if all_fp:
-        for e in reversed(all_fp[-10:]):
-            st.markdown(f"- **{e['timestamp']}** | `{e['indicator']}` | {e['reason']} | "
-                        f"Analyst: {e['analyst']} | Times: **{e['repeat_count']}**")
-    else:
-        st.info("No false positives logged yet.")
+        # Log FP
+        fp_log = []
+        fp_log_path = "data/fp_log.json"
+        if os.path.exists(fp_log_path):
+            try: fp_log = json.load(open(fp_log_path))
+            except: fp_log = []
+        fp_log.append({
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "url": fp_url,
+            "reason": fp_reason,
+            "notes": fp_notes,
+            "added_to_allowlist": fp_add
+        })
+        json.dump(fp_log, open(fp_log_path, "w"), indent=2)
+        st.success(f"✅ FP logged. {len(fp_log)} total FPs recorded.")
+        st.caption("Use FP patterns to tune your detection rules over time.")
 
+# ── TAB 6: SIEM QUERIES ───────────────────────────────────────────────────────
+with tab_siem:
+    st.markdown("## 🔎 SIEM Query Generator")
+    st.caption("Generate ready-to-paste KQL (Sentinel) and SPL (Splunk) queries from a URL or domain.")
+    st.divider()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — SIEM QUERIES
-# ══════════════════════════════════════════════════════════════════════════════
-with tab6:
-    st.markdown("### 🔎 Context-Aware SIEM Query Generator")
-    st.caption("Paste a URL or domain. Get 6 ready-to-run queries + block rule. No Googling.")
-    siem_url = st.text_input("URL or domain", placeholder="http://amaz0n-verify.tk", key="siem_url")
+    siem_url  = st.text_input("URL or domain", key="siem_url")
+    siem_type = st.selectbox("SIEM", ["Microsoft Sentinel (KQL)", "Splunk (SPL)", "Both"], key="siem_type")
+    siem_btn  = st.button("Generate Queries", type="primary", key="siem_btn")
 
-    if st.button("🔎 Generate SIEM Queries", type="primary", use_container_width=True):
-        if not siem_url:
-            st.warning("Enter a URL or domain.")
-        else:
-            from ioc_engine import extract_domain as _ed
-            q = generate_all(siem_url)
-            st.info(f"Queries generated for domain: `{_ed(siem_url)}`")
-            st.markdown("---")
-            st.markdown("#### Splunk SPL")
-            s1, s2 = st.columns(2)
-            s1.markdown("**Proxy Hunt**");  s1.code(q["splunk_proxy"], language="splunk")
-            s1.download_button("⬇️ Proxy SPL", q["splunk_proxy"], file_name="proxy.spl")
-            s2.markdown("**DNS Hunt**");    s2.code(q["splunk_dns"],   language="splunk")
-            s2.download_button("⬇️ DNS SPL", q["splunk_dns"],   file_name="dns.spl")
-            st.code(q["splunk_email"], language="splunk"); st.download_button("⬇️ Email SPL", q["splunk_email"], file_name="email.spl")
-            st.markdown("---")
-            st.markdown("#### Microsoft Sentinel KQL")
-            k1, k2 = st.columns(2)
-            k1.markdown("**Network Events**");   k1.code(q["kql_network"],   language="sql")
-            k1.download_button("⬇️ KQL Net",  q["kql_network"],   file_name="net.kql")
-            k2.markdown("**Email Events**");     k2.code(q["kql_email"],     language="sql")
-            k2.download_button("⬇️ KQL Email", q["kql_email"],     file_name="email.kql")
-            st.code(q["kql_endpoint"], language="sql"); st.download_button("⬇️ KQL Endpoint", q["kql_endpoint"], file_name="endpoint.kql")
-            st.markdown("---")
-            st.markdown("#### 🔒 Block Rule")
-            st.code(q["block_rule"], language="bash")
-            st.download_button("⬇️ Block Rule", q["block_rule"], file_name="block_rule.txt")
+    if siem_btn and siem_url:
+        from urllib.parse import urlparse
+        dom = urlparse(siem_url if siem_url.startswith("http") else "https://"+siem_url).netloc.replace("www.", "")
 
-st.markdown("---")
-st.markdown("<div style='text-align:center;color:#484f58;font-size:0.78rem'>"
-            "PhishTriage Pro v2.0 — Built by Praharsh Kumar | "
-            "<a href='https://github.com/praharshkumar23' style='color:#388bfd'>GitHub</a></div>",
-            unsafe_allow_html=True)
-with st.sidebar:
-    st.markdown("### ⚙️ Settings")
-    offline_mode = st.toggle("Force Offline Mode (API unavailable)", value=False)
-    st.markdown("### 🛡️ Allowlisted Domains")
-    if OFFLINE_AVAILABLE:
-        for d in get_allowlist()[:5]:
-            st.caption(f"✅ {d}")
-        st.caption("Edit `data/allowlist.json` to manage.")
-    st.markdown("---")
+        if siem_type in ["Microsoft Sentinel (KQL)", "Both"]:
+            kql = f"""// PhishTriage Pro — KQL Query
+// Incident: {dom} | Generated: {datetime.now().strftime("%Y-%m-%d")}
+
+// 1. Email delivery — did anyone receive this link?
+EmailEvents
+| where Timestamp > ago(7d)
+| where RecipientEmailAddress != ""
+| where Urls has "{dom}"
+| project Timestamp, SenderFromAddress, RecipientEmailAddress, Subject, Urls
+
+// 2. URL click events — did anyone click it?
+UrlClickEvents
+| where Timestamp > ago(7d)
+| where Url has "{dom}"
+| project Timestamp, AccountUpn, Url, ActionType, IPAddress
+
+// 3. Network connection — did any endpoint connect to this domain?
+DeviceNetworkEvents
+| where Timestamp > ago(7d)
+| where RemoteUrl has "{dom}"
+| project Timestamp, DeviceName, InitiatingProcessFileName, RemoteUrl, RemoteIP
+"""
+            st.markdown("### KQL — Microsoft Sentinel")
+            st.code(kql, language="sql")
+            st.download_button("⬇️ Download KQL", kql, f"query_{dom}.kql", "text/plain")
+
+        if siem_type in ["Splunk (SPL)", "Both"]:
+            spl = f"""| PhishTriage Pro — SPL Query
+| Incident: {dom} | Generated: {datetime.now().strftime("%Y-%m-%d")}
+
+index=email_logs earliest=-7d
+| search url="*{dom}*"
+| table _time, src_user, recipient, subject, url
+
+index=proxy earliest=-7d
+| search url="*{dom}*"
+| table _time, src_ip, user, url, action, http_status
+
+index=endpoint earliest=-7d
+| search dest_host="*{dom}*"
+| table _time, host, process, dest_host, dest_ip
+"""
+            st.markdown("### SPL — Splunk")
+            st.code(spl, language="bash")
+            st.download_button("⬇️ Download SPL", spl, f"query_{dom}.spl", "text/plain")
