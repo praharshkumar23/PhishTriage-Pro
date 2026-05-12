@@ -156,7 +156,17 @@ def run_offline(url):
 def run_threat_intel(url):
     if threat_intel_mod:
         try:
-            return threat_intel_mod.run_full_intel(url), threat_intel_mod.check_heuristics(url)
+            from urllib.parse import urlparse
+            import socket
+            parsed = urlparse(url if url.startswith("http") else "https://" + url)
+            domain = parsed.netloc.replace("www.", "").split(":")[0]
+            try:
+                ip = socket.gethostbyname(domain)
+            except Exception:
+                ip = "Could not resolve"
+            ti = threat_intel_mod.run_full_intel(url, ip, domain)
+            heur = threat_intel_mod.check_heuristics(url, domain)
+            return ti, heur
         except Exception as e:
             return {"error": str(e)}, {}
     return None, None
@@ -294,7 +304,15 @@ with tab_inv:
     with col_hash:
         att_hash = st.text_input("Attachment hash (optional)", placeholder="SHA256...", key="att_hash")
 
-    gen_btn = st.button("⚡ Generate Investigation Pack", type="primary", use_container_width=True, key="gen_inv")
+    col_gen, col_clr = st.columns([5, 1])
+    with col_gen:
+        gen_btn = st.button("⚡ Generate Investigation Pack", type="primary", use_container_width=True, key="gen_inv")
+    with col_clr:
+        clr_btn = st.button("🗑️ Clear", use_container_width=True, key="clr_inv")
+    if clr_btn:
+        st.session_state["inv_url"] = ""
+        st.session_state["att_hash"] = ""
+        st.rerun()
 
     if gen_btn and inv_url:
         # Allowlist check
@@ -425,7 +443,14 @@ with tab_ti:
     st.divider()
 
     ti_url = st.text_input("URL to enrich", placeholder="https://suspicious-domain.xyz", key="ti_url")
-    ti_btn = st.button("Run Threat Intel", type="primary", key="ti_btn")
+    ti_col1, ti_col2 = st.columns([5, 1])
+    with ti_col1:
+        ti_btn = st.button("Run Threat Intel", type="primary", use_container_width=True, key="ti_btn")
+    with ti_col2:
+        ti_clr = st.button("🗑️ Clear", use_container_width=True, key="ti_clr")
+    if ti_clr:
+        st.session_state["ti_url"] = ""
+        st.rerun()
 
     if ti_btn and ti_url:
         if check_allowlist(ti_url):
@@ -611,7 +636,14 @@ with tab_siem:
 
     siem_url  = st.text_input("URL or domain", key="siem_url")
     siem_type = st.selectbox("SIEM", ["Microsoft Sentinel (KQL)", "Splunk (SPL)", "Both"], key="siem_type")
-    siem_btn  = st.button("Generate Queries", type="primary", key="siem_btn")
+    siem_col1, siem_col2 = st.columns([5, 1])
+    with siem_col1:
+        siem_btn = st.button("Generate Queries", type="primary", use_container_width=True, key="siem_btn")
+    with siem_col2:
+        siem_clr = st.button("🗑️ Clear", use_container_width=True, key="siem_clr")
+    if siem_clr:
+        st.session_state["siem_url"] = ""
+        st.rerun()
 
     if siem_btn and siem_url:
         from urllib.parse import urlparse
@@ -663,3 +695,43 @@ index=endpoint earliest=-7d
             st.markdown("### SPL — Splunk")
             st.code(spl, language="bash")
             st.download_button("⬇️ Download SPL", spl, f"query_{dom}.spl", "text/plain")
+
+
+# ── SCAN HISTORY (shown in sidebar) ──────────────────────────────────────────
+with st.sidebar:
+    st.divider()
+    st.markdown("### 📜 Recent Scans")
+    history = load_scan_history()
+    if not history:
+        st.caption("No scans yet.")
+    else:
+        for h in reversed(history[-8:]):
+            verdict = h.get("verdict", "UNKNOWN")
+            score   = h.get("score", 0)
+            url_short = h.get("url", "")[:35] + ("..." if len(h.get("url","")) > 35 else "")
+            color = "🔴" if "MALICIOUS" in verdict else "🟡" if "SUSPICIOUS" in verdict else "🟢"
+            st.markdown(f"{color} `{score}/100` — {url_short}")
+            st.caption(h.get("ts", ""))
+        st.divider()
+        if st.button("🗑️ Clear History", key="clr_hist"):
+            import json
+            json.dump([], open("scan_history.json", "w"))
+            st.rerun()
+
+
+# ── HISTORY TAB embedded at bottom of page ────────────────────────────────────
+st.divider()
+with st.expander("📜 Full Scan History", expanded=False):
+    history = load_scan_history()
+    if not history:
+        st.info("No scans recorded yet. Run a scan from the Investigation Pack tab.")
+    else:
+        import pandas as pd
+        df_hist = pd.DataFrame(reversed(history))
+        df_hist.columns = [c.upper() for c in df_hist.columns]
+        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+        csv_hist = df_hist.to_csv(index=False)
+        st.download_button("⬇️ Export History CSV", csv_hist, "scan_history.csv", "text/csv")
+        if st.button("🗑️ Clear All History", key="clr_hist_main"):
+            json.dump([], open("scan_history.json", "w"))
+            st.rerun()
