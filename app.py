@@ -139,6 +139,9 @@ siem_mod, _          = _try_import("modules.siem_queries")
 mitre_mod, _         = _try_import("modules.mitre_engine")
 ioc_mod, _           = _try_import("modules.ioc_engine")
 campaign_mod, _      = _try_import("modules.campaign_correlation")
+seen_before_mod, _   = _try_import("modules.seen_before")
+escalation_mod, _    = _try_import("modules.escalation_pack")
+campaign_det_mod, _  = _try_import("modules.campaign_detector")
 suppression_mod, _   = _try_import("modules.suppression")
 offline_mod, _       = _try_import("modules.offline_fallback")
 bulk_mod, _          = _try_import("modules.bulk_triage")
@@ -175,6 +178,38 @@ def run_campaign(url):
     if campaign_mod:
         try:
             return campaign_mod.simple_campaign_cluster(url)
+        except Exception:
+            return None
+    return None
+
+def run_seen_before(url):
+    if seen_before_mod:
+        try:
+            return seen_before_mod.seen_before(url)
+        except Exception as e:
+            return {"seen": False, "message": f"Check failed: {e}"}
+    return None
+
+def run_escalation_pack(scan_data, analyst, escalate_to, incident_id):
+    if escalation_mod:
+        try:
+            return escalation_mod.generate_escalation_pack(scan_data, analyst, escalate_to, incident_id)
+        except Exception as e:
+            return f"Escalation pack error: {e}"
+    return None
+
+def run_campaign_detect(url):
+    if campaign_det_mod:
+        try:
+            return campaign_det_mod.detect_campaign(url)
+        except Exception as e:
+            return {"campaign_detected": False, "message": f"Detection failed: {e}"}
+    return None
+
+def run_heatmap():
+    if campaign_det_mod:
+        try:
+            return campaign_det_mod.get_campaign_heatmap()
         except Exception:
             return None
     return None
@@ -321,9 +356,11 @@ with tab_inv:
             st.stop()
 
         with st.spinner("Running triage layers..."):
-            offline_result = run_offline(inv_url)
+            offline_result   = run_offline(inv_url)
             ti_result, heuristics = run_threat_intel(inv_url)
-            campaign_result = run_campaign(inv_url)
+            campaign_result  = run_campaign(inv_url)
+            seen_result      = run_seen_before(inv_url)
+            campaign_det     = run_campaign_detect(inv_url)
 
         # ── Verdict banner
         if offline_result:
@@ -392,6 +429,52 @@ with tab_inv:
             for f in flags:
                 st.markdown(f'<span class="ioc-pill ioc-pill-red">🔴 {f}</span>', unsafe_allow_html=True)
 
+        # ── Seen Before? ─────────────────────────────────────────────────────────
+        st.markdown('<div class="sec-head">🔍 Seen Before?</div>', unsafe_allow_html=True)
+        if seen_result:
+            if seen_result.get("seen"):
+                conf = seen_result.get("confidence","")
+                conf_color = "#ef4444" if conf=="HIGH" else "#f97316" if conf=="MEDIUM" else "#eab308"
+                st.markdown(f"""
+<div class="signal-card signal-hit">
+  <div class="signal-label">Prior history match — confidence: <span style="color:{conf_color};font-weight:700">{conf}</span></div>
+  <div class="signal-value">{seen_result.get("message","")}</div>
+</div>""", unsafe_allow_html=True)
+                total_m = seen_result.get("total_matches", 0)
+                mal_h   = seen_result.get("malicious_hits", 0)
+                s1, s2 = st.columns(2)
+                s1.metric("Prior Matches", total_m)
+                s2.metric("Malicious Hits", mal_h)
+                prior = seen_result.get("exact",[]) + seen_result.get("domain",[]) + seen_result.get("pattern",[])
+                if prior:
+                    for p in prior[:3]:
+                        st.markdown(f"- `{p.get('url','')}` — **{p.get('verdict','?')}** on {p.get('ts','')}")
+            else:
+                st.markdown('<div class="signal-card signal-ok"><div class="signal-value">🟢 First time seeing this URL — no prior history.</div></div>', unsafe_allow_html=True)
+        else:
+            st.caption("Seen Before module not loaded.")
+
+        # ── Campaign Detection ────────────────────────────────────────────────
+        if campaign_det and campaign_det.get("campaign_detected"):
+            st.markdown('<div class="sec-head">🔴 Campaign Detected</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+<div class="signal-card signal-hit">
+  <div class="signal-label">Campaign Confidence: {campaign_det.get("campaign_confidence","?")}</div>
+  <div class="signal-value">{campaign_det.get("message","")}</div>
+  <div class="verdict-action">{campaign_det.get("recommendation","")}</div>
+</div>""", unsafe_allow_html=True)
+            cd1, cd2 = st.columns(2)
+            cd1.metric("Cluster Size", campaign_det.get("cluster_size", 0))
+            cd2.metric("Malicious in Cluster", campaign_det.get("malicious_in_cluster", 0))
+            if campaign_det.get("top_reasons"):
+                st.markdown("**Why matched:**")
+                for r in campaign_det.get("top_reasons",[]):
+                    st.markdown(f"- {r}")
+            if campaign_det.get("related_urls"):
+                st.markdown("**Related URLs in history:**")
+                for ru in campaign_det.get("related_urls",[])[:3]:
+                    st.markdown(f"- `{ru.get('url','')}` — {ru.get('verdict','?')} on {ru.get('ts','')}")
+
         # ── Campaign correlation
         if campaign_result:
             st.markdown('<div class="sec-head">Campaign Correlation</div>', unsafe_allow_html=True)
@@ -434,6 +517,26 @@ with tab_inv:
             st.markdown(f"`{a}`")
 
         save_scan(inv_url, {"score": score, "verdict": verdict, "mode": mode_label})
+
+        # ── Auto Escalation Pack ──────────────────────────────────────────────
+        st.markdown('<div class="sec-head">📋 Auto Escalation Pack</div>', unsafe_allow_html=True)
+        esc_to = st.text_input("Escalate to (name/team)", value="L2 Analyst", key="esc_to")
+        esc_btn = st.button("📤 Generate Escalation Pack", key="esc_btn")
+        if esc_btn:
+            scan_data = {
+                "url": inv_url, "score": score, "verdict": verdict,
+                "mode": mode_label, "flags": flags,
+                "seen_before": seen_result or {},
+                "api_results": ti_result if ti_result and not isinstance(ti_result, dict) or (isinstance(ti_result, dict) and not ti_result.get("error")) else {}
+            }
+            pack = run_escalation_pack(scan_data, analyst, esc_to, inc_id)
+            if pack:
+                st.code(pack, language="markdown")
+                st.download_button("⬇️ Download Escalation Pack (.md)", pack,
+                                   f"escalation_{inc_id}.md", "text/markdown")
+            else:
+                st.warning("Escalation pack module not loaded.")
+
         st.success("✅ Investigation pack generated. Use **Shift Handoff** tab to export.")
 
 # ── TAB 2: THREAT INTEL ───────────────────────────────────────────────────────
@@ -735,3 +838,27 @@ with st.expander("📜 Full Scan History", expanded=False):
         if st.button("🗑️ Clear All History", key="clr_hist_main"):
             json.dump([], open("scan_history.json", "w"))
             st.rerun()
+
+
+# ── CAMPAIGN HEATMAP ──────────────────────────────────────────────────────────
+with st.expander("📊 Campaign Heatmap — Patterns Across All Scans", expanded=False):
+    heatmap = run_heatmap()
+    if not heatmap or heatmap.get("total", 0) == 0:
+        st.info("No scan history yet. Run some scans first.")
+    else:
+        st.caption(f"Based on {heatmap['total']} total scans")
+        hm1, hm2, hm3 = st.columns(3)
+        with hm1:
+            st.markdown("**Top TLDs seen**")
+            for tld, count in list(heatmap.get("tld_counts", {}).items())[:5]:
+                bar = "█" * min(count * 3, 20)
+                st.markdown(f"`{tld}` {bar} {count}")
+        with hm2:
+            st.markdown("**Brand targets**")
+            for brand, count in list(heatmap.get("brand_counts", {}).items())[:5]:
+                st.markdown(f"`{brand}` — {count}x")
+        with hm3:
+            st.markdown("**Verdicts breakdown**")
+            for verdict, count in heatmap.get("verdict_counts", {}).items():
+                color = "🔴" if "MALICIOUS" in verdict else "🟡" if "SUSPICIOUS" in verdict else "🟢"
+                st.markdown(f"{color} {verdict}: {count}")
