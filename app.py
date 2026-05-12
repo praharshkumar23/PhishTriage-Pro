@@ -268,15 +268,23 @@ with st.sidebar:
 """)
     st.divider()
 
-    # API key status
-    vt_key  = os.getenv("VIRUSTOTAL_API_KEY", "")
-    ab_key  = os.getenv("ABUSEIPDB_API_KEY", "")
-    ot_key  = os.getenv("OTX_API_KEY", "")
-    gs_key  = os.getenv("GOOGLE_SAFE_BROWSING_KEY", "")
+    # API key status — reads from Streamlit Secrets first
+    def _sidebar_key(name):
+        try:
+            val = st.secrets.get(name, "")
+            if val: return val
+        except Exception:
+            pass
+        return os.getenv(name, "")
+
+    vt_key  = _sidebar_key("VIRUSTOTAL_API_KEY")
+    ab_key  = _sidebar_key("ABUSEIPDB_API_KEY")
+    ot_key  = _sidebar_key("OTX_API_KEY")
+    gs_key  = _sidebar_key("GOOGLE_SAFE_BROWSING_KEY")
 
     has_any = any([vt_key, ab_key, ot_key, gs_key])
     if not has_any:
-        st.warning("⚠️ No API keys set. Add to .env\nto enable live threat intel.")
+        st.warning("⚠️ No API keys set in Streamlit Secrets.")
     else:
         st.markdown("**API Status:**")
         st.markdown(f"{'🟢' if vt_key else '🔴'} VirusTotal")
@@ -325,11 +333,13 @@ with tab_inv:
     st.caption("Paste a flagged URL → get IOCs, MITRE mapping, block rules, SIEM queries, and timeline in one click.")
     st.divider()
 
-    col_url, col_type = st.columns([4, 1])
+    col_url, col_type, col_mode = st.columns([3, 1, 1])
     with col_url:
         inv_url = st.text_input("Flagged URL", placeholder="http://amaz0n-verify.tk/login", key="inv_url", label_visibility="visible")
     with col_type:
         atk_type = st.selectbox("Attack type", ["phishing-link","credential-harvest","malware-dl","BEC","smishing"], key="atk_type")
+    with col_mode:
+        scan_mode = st.selectbox("Scan mode", ["🌐 API (Live)", "⚡ Offline (Fast)", "🔀 Both"], key="scan_mode")
 
     col_inc, col_analyst, col_hash = st.columns(3)
     with col_inc:
@@ -355,24 +365,40 @@ with tab_inv:
             st.warning(f"⚠️ **Suppressed** — `{inv_url}` matches your allowlist. Likely internal or known-safe. Review `data/allowlist.json` if unexpected.")
             st.stop()
 
-        with st.spinner("Running triage layers..."):
-            offline_result   = run_offline(inv_url)
-            ti_result, heuristics = run_threat_intel(inv_url)
+        use_api     = scan_mode in ["🌐 API (Live)", "🔀 Both"]
+        use_offline = scan_mode in ["⚡ Offline (Fast)", "🔀 Both"]
+
+        with st.spinner("Running triage..." if not use_api else "Querying live APIs — may take 10–15 seconds..."):
+            offline_result   = run_offline(inv_url) if use_offline else None
+            ti_result, heuristics = run_threat_intel(inv_url) if use_api else (None, None)
             campaign_result  = run_campaign(inv_url)
             seen_result      = run_seen_before(inv_url)
             campaign_det     = run_campaign_detect(inv_url)
 
-        # ── Verdict banner
-        if offline_result:
-            score   = offline_result.get("score", 0)
-            verdict = offline_result.get("verdict", "UNKNOWN")
-            flags   = offline_result.get("flags", [])
-            mode_label = offline_result.get("mode", "offline")
-        elif ti_result and not ti_result.get("error"):
-            score   = ti_result.get("score", 0)
-            verdict = ti_result.get("verdict", "UNKNOWN")
-            flags   = ti_result.get("flags", [])
-            mode_label = "online"
+        # ── Pick best available result for verdict ────────────────────────────
+        agg = (ti_result or {}).get("aggregate", {})
+        heur = (ti_result or {}).get("heuristics", {})
+
+        if use_api and ti_result and not ti_result.get("error") and agg.get("high_signals", 0) >= 0:
+            # Use API result — score from heuristics inside ti, enriched by API signals
+            h_score   = heur.get("score", 0)
+            api_boost = agg.get("high_signals", 0) * 15
+            score     = min(h_score + api_boost, 100)
+            verdict   = ("MALICIOUS" if score >= 70 else
+                         "SUSPICIOUS" if score >= 40 else "LOW RISK")
+            flags     = heur.get("flags", [])
+            mode_label = f"ONLINE — {agg.get('high_signals',0)}/5 API signals hit"
+            if agg.get("high_signals", 0) == 0 and use_offline and offline_result:
+                # API ran but no hits — blend with offline
+                score      = offline_result.get("score", score)
+                verdict    = offline_result.get("verdict", verdict)
+                flags      = offline_result.get("flags", flags)
+                mode_label = "ONLINE + OFFLINE — no API hits, using heuristics"
+        elif use_offline and offline_result:
+            score      = offline_result.get("score", 0)
+            verdict    = offline_result.get("verdict", "UNKNOWN")
+            flags      = offline_result.get("flags", [])
+            mode_label = "OFFLINE — heuristics only"
         else:
             score, verdict, flags, mode_label = 0, "ERROR", [], "error"
 
