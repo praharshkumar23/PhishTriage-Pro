@@ -2,9 +2,7 @@ import json, os
 from datetime import datetime
 from urllib.parse import urlparse
 
-def generate_escalation_pack(scan_data: dict, analyst: str = "Praharsh Kumar",
-                               escalate_to: str = "L2 Analyst",
-                               incident_id: str = "INC-2026-0000") -> str:
+def generate_escalation_pack(scan_data: dict, analyst: str = "Praharsh Kumar", escalate_to: str = "L2 Analyst", incident_id: str = "INC-2026-0000") -> str:
     """
     Auto-generate a rich escalation pack from real scan data.
     Includes: timeline, all API results, IOCs, verdict, recommended actions.
