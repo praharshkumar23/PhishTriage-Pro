@@ -355,8 +355,8 @@ with tab_inv:
     with col_clr:
         clr_btn = st.button("🗑️ Clear", use_container_width=True, key="clr_inv")
     if clr_btn:
-        st.session_state["inv_url"] = ""
-        st.session_state["att_hash"] = ""
+        st.session_state.pop("inv_url", None)
+        st.session_state.pop("att_hash", None)
         st.rerun()
 
     if gen_btn and inv_url:
@@ -578,7 +578,7 @@ with tab_ti:
     with ti_col2:
         ti_clr = st.button("🗑️ Clear", use_container_width=True, key="ti_clr")
     if ti_clr:
-        st.session_state["ti_url"] = ""
+        st.session_state.pop("ti_url", None)
         st.rerun()
 
     if ti_btn and ti_url:
@@ -771,7 +771,7 @@ with tab_siem:
     with siem_col2:
         siem_clr = st.button("🗑️ Clear", use_container_width=True, key="siem_clr")
     if siem_clr:
-        st.session_state["siem_url"] = ""
+        st.session_state.pop("siem_url", None)
         st.rerun()
 
     if siem_btn and siem_url:
