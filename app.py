@@ -14,11 +14,8 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Global */
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-
-/* Header */
 .soc-header { 
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
     border: 1px solid #334155;
@@ -29,12 +26,8 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     align-items: center;
     gap: 16px;
 }
-.soc-header h1 { 
-    font-size: 1.8rem; font-weight: 700; color: #f1f5f9; margin: 0; 
-}
+.soc-header h1 { font-size: 1.8rem; font-weight: 700; color: #f1f5f9; margin: 0; }
 .soc-header p { color: #94a3b8; font-size: 0.85rem; margin: 4px 0 0 0; }
-
-/* Verdict cards */
 .verdict-malicious {
     background: linear-gradient(135deg, #450a0a, #7f1d1d);
     border: 1px solid #ef4444;
@@ -53,8 +46,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .verdict-title { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; }
 .verdict-score { font-size: 2.5rem; font-weight: 800; }
 .verdict-action { color: #cbd5e1; font-size: 0.9rem; margin-top: 8px; }
-
-/* Signal cards */
 .signal-card {
     background: #1e293b;
     border: 1px solid #334155;
@@ -67,12 +58,8 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .signal-warn { border-left: 3px solid #f97316; }
 .signal-label { font-size: 0.78rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
 .signal-value { font-size: 1.0rem; font-weight: 600; color: #f1f5f9; margin-top: 2px; }
-
-/* Score bar */
 .score-bar-wrap { background: #1e293b; border-radius: 8px; height: 12px; margin: 6px 0; }
 .score-bar-fill { height: 12px; border-radius: 8px; transition: width 0.4s; }
-
-/* IOC pill */
 .ioc-pill {
     display: inline-block;
     background: #1e293b;
@@ -85,8 +72,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     margin: 3px 3px 3px 0;
 }
 .ioc-pill-red { border-color: #ef4444; color: #fca5a5; }
-
-/* Section header */
 .sec-head {
     font-size: 0.72rem;
     font-weight: 700;
@@ -97,8 +82,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border-bottom: 1px solid #1e293b;
     padding-bottom: 4px;
 }
-
-/* Sidebar */
 section[data-testid="stSidebar"] {
     background: #0f172a !important;
     border-right: 1px solid #1e293b;
@@ -113,14 +96,6 @@ section[data-testid="stSidebar"] {
 }
 .sidebar-stat-num { font-size: 1.5rem; font-weight: 700; color: #f1f5f9; }
 .sidebar-stat-label { font-size: 0.72rem; color: #94a3b8; }
-
-/* API status dot */
-.dot-green { color: #22c55e; }
-.dot-red   { color: #ef4444; }
-.dot-warn  { color: #f97316; }
-
-/* Action button row */
-.action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -250,6 +225,21 @@ def save_scan(url, result):
     })
     json.dump(history, open("scan_history.json", "w"), indent=2)
 
+# ── Session state init — MUST happen before any widget renders ────────────────
+# Never set session_state[widget_key] after the widget is drawn.
+# Use default= on the widget itself OR pop() + rerun() pattern for clears.
+_DEFAULTS = {
+    "inv_url": "",
+    "att_hash": "",
+    "ti_url": "",
+    "siem_url": "",
+    "ho_url": "",
+    "fp_url": "",
+}
+for _k, _v in _DEFAULTS.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🎯 PhishTriage Pro")
@@ -268,7 +258,6 @@ with st.sidebar:
 """)
     st.divider()
 
-    # API key status — reads from Streamlit Secrets first
     def _sidebar_key(name):
         try:
             val = st.secrets.get(name, "")
@@ -294,17 +283,14 @@ with st.sidebar:
 
     st.divider()
 
-    # Quick stats
     history = load_scan_history()
     total   = len(history)
     mal     = sum(1 for h in history if "MALICIOUS" in str(h.get("verdict","")))
-    fp      = sum(1 for h in history if "FP" in str(h.get("verdict","")))
 
     st.markdown("**Session Stats:**")
     c1, c2 = st.columns(2)
     c1.metric("Scanned", total)
     c2.metric("Malicious", mal)
-    st.caption(f"FP Patterns Logged")
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -335,7 +321,7 @@ with tab_inv:
 
     col_url, col_type, col_mode = st.columns([3, 1, 1])
     with col_url:
-        inv_url = st.text_input("Flagged URL", placeholder="http://amaz0n-verify.tk/login", key="inv_url", label_visibility="visible")
+        inv_url = st.text_input("Flagged URL", placeholder="http://amaz0n-verify.tk/login", key="inv_url")
     with col_type:
         atk_type = st.selectbox("Attack type", ["phishing-link","credential-harvest","malware-dl","BEC","smishing"], key="atk_type")
     with col_mode:
@@ -360,40 +346,42 @@ with tab_inv:
         st.rerun()
 
     if gen_btn and inv_url:
-        # Allowlist check
         if check_allowlist(inv_url):
-            st.warning(f"⚠️ **Suppressed** — `{inv_url}` matches your allowlist. Likely internal or known-safe. Review `data/allowlist.json` if unexpected.")
+            st.warning(f"⚠️ **Suppressed** — `{inv_url}` matches your allowlist.")
             st.stop()
 
         use_api     = scan_mode in ["🌐 API (Live)", "🔀 Both"]
         use_offline = scan_mode in ["⚡ Offline (Fast)", "🔀 Both"]
 
         with st.spinner("Running triage..." if not use_api else "Querying live APIs — may take 10–15 seconds..."):
-            offline_result   = run_offline(inv_url) if use_offline else None
+            offline_result        = run_offline(inv_url) if use_offline else None
             ti_result, heuristics = run_threat_intel(inv_url) if use_api else (None, None)
-            campaign_result  = run_campaign(inv_url)
-            seen_result      = run_seen_before(inv_url)
-            campaign_det     = run_campaign_detect(inv_url)
+            campaign_result       = run_campaign(inv_url)
+            seen_result           = run_seen_before(inv_url)
+            campaign_det          = run_campaign_detect(inv_url)
 
-        # ── Pick best available result for verdict ────────────────────────────
-        agg = (ti_result or {}).get("aggregate", {})
+        agg  = (ti_result or {}).get("aggregate", {})
         heur = (ti_result or {}).get("heuristics", {})
 
-        if use_api and ti_result and not ti_result.get("error") and agg.get("high_signals", 0) >= 0:
-            # Use API result — score from heuristics inside ti, enriched by API signals
-            h_score   = heur.get("score", 0)
+        # ── Verdict logic — live API data always overrides offline ────────────
+        vt_data = (ti_result or {}).get("virustotal", {})
+        vt_malicious = vt_data.get("malicious", 0) if vt_data else 0
+        vt_total     = vt_data.get("total", 0) if vt_data else 0
+
+        if use_api and ti_result and not ti_result.get("error"):
+            h_score   = heur.get("score", 0) if heur else 0
             api_boost = agg.get("high_signals", 0) * 15
             score     = min(h_score + api_boost, 100)
-            verdict   = ("MALICIOUS" if score >= 70 else
-                         "SUSPICIOUS" if score >= 40 else "LOW RISK")
-            flags     = heur.get("flags", [])
+            verdict   = ("MALICIOUS" if score >= 70 else "SUSPICIOUS" if score >= 40 else "LOW RISK")
+            flags     = heur.get("flags", []) if heur else []
             mode_label = f"ONLINE — {agg.get('high_signals',0)}/5 API signals hit"
+
             if agg.get("high_signals", 0) == 0 and use_offline and offline_result:
-                # API ran but no hits — blend with offline
                 score      = offline_result.get("score", score)
                 verdict    = offline_result.get("verdict", verdict)
                 flags      = offline_result.get("flags", flags)
                 mode_label = "ONLINE + OFFLINE — no API hits, using heuristics"
+
         elif use_offline and offline_result:
             score      = offline_result.get("score", 0)
             verdict    = offline_result.get("verdict", "UNKNOWN")
@@ -402,18 +390,29 @@ with tab_inv:
         else:
             score, verdict, flags, mode_label = 0, "ERROR", [], "error"
 
+        # ── Hard overrides — VT vendor count cannot be ignored ────────────────
+        if vt_total > 0:
+            if vt_malicious >= 10:
+                score = max(score, 85)
+            elif vt_malicious >= 3:
+                score = max(score, 72)
+            elif vt_malicious >= 1:
+                score = max(score, 42)
+
+        # Re-derive verdict from final score
         if score >= 70:
-            css_class = "verdict-malicious"
-            color = "#ef4444"
-            icon = "🚨"
+            verdict = "MALICIOUS"
         elif score >= 40:
-            css_class = "verdict-suspicious"
-            color = "#f97316"
-            icon = "⚠️"
+            verdict = "SUSPICIOUS"
+        elif verdict not in ("ERROR", "UNKNOWN"):
+            verdict = "LOW RISK"
+
+        if score >= 70:
+            css_class, color, icon = "verdict-malicious", "#ef4444", "🚨"
+        elif score >= 40:
+            css_class, color, icon = "verdict-suspicious", "#f97316", "⚠️"
         else:
-            css_class = "verdict-safe"
-            color = "#22c55e"
-            icon = "✅"
+            css_class, color, icon = "verdict-safe", "#22c55e", "✅"
 
         st.markdown(f"""
 <div class="{css_class}">
@@ -427,54 +426,52 @@ with tab_inv:
 </div>
 """, unsafe_allow_html=True)
 
-        # ── Score breakdown
+        # ── Score breakdown ───────────────────────────────────────────────────
         st.markdown('<div class="sec-head">Score Breakdown</div>', unsafe_allow_html=True)
         layers = {
-            "VirusTotal":      (35, min(score * 1.1, 100) if score > 0 else 0),
-            "Heuristics":      (20, score),
-            "Domain Age":      (15, 80 if score > 60 else 20),
-            "AbuseIPDB":       (10, score * 0.8),
-            "AI Semantic":     (20, score * 0.9),
+            "VirusTotal (35% weight)":  min(score * 1.1, 100) if score > 0 else 0,
+            "Heuristics (20% weight)":  score,
+            "Domain Age (15% weight)":  80 if score > 60 else 20,
+            "AbuseIPDB (10% weight)":   score * 0.8,
+            "AI Semantic (20% weight)": score * 0.9,
         }
-        for layer, (weight, layer_score) in layers.items():
+        for layer, layer_score in layers.items():
+            weight = int(layer.split("(")[1].split("%")[0])
             contrib = round(weight * layer_score / 100, 1)
             bar_color = "#ef4444" if contrib > 15 else "#f97316" if contrib > 8 else "#22c55e"
             bar_pct = int(min(layer_score, 100))
             st.markdown(f"""
 <div class="signal-card {'signal-hit' if contrib > 15 else 'signal-warn' if contrib > 8 else 'signal-ok'}">
   <div style="display:flex; justify-content:space-between;">
-    <span class="signal-label">{layer} ({weight}% weight)</span>
+    <span class="signal-label">{layer}</span>
     <span style="font-size:0.85rem; color:{bar_color}; font-weight:700">{contrib} pts</span>
   </div>
   <div class="score-bar-wrap"><div class="score-bar-fill" style="width:{bar_pct}%; background:{bar_color}"></div></div>
 </div>""", unsafe_allow_html=True)
 
-        # ── Detection flags
+        # ── Detection flags ───────────────────────────────────────────────────
         if flags:
             st.markdown('<div class="sec-head">Detection Signals</div>', unsafe_allow_html=True)
             for f in flags:
                 st.markdown(f'<span class="ioc-pill ioc-pill-red">🔴 {f}</span>', unsafe_allow_html=True)
 
-        # ── Seen Before? ─────────────────────────────────────────────────────────
+        # ── Seen Before ───────────────────────────────────────────────────────
         st.markdown('<div class="sec-head">🔍 Seen Before?</div>', unsafe_allow_html=True)
         if seen_result:
             if seen_result.get("seen"):
-                conf = seen_result.get("confidence","")
+                conf = seen_result.get("confidence", "")
                 conf_color = "#ef4444" if conf=="HIGH" else "#f97316" if conf=="MEDIUM" else "#eab308"
                 st.markdown(f"""
 <div class="signal-card signal-hit">
   <div class="signal-label">Prior history match — confidence: <span style="color:{conf_color};font-weight:700">{conf}</span></div>
   <div class="signal-value">{seen_result.get("message","")}</div>
 </div>""", unsafe_allow_html=True)
-                total_m = seen_result.get("total_matches", 0)
-                mal_h   = seen_result.get("malicious_hits", 0)
                 s1, s2 = st.columns(2)
-                s1.metric("Prior Matches", total_m)
-                s2.metric("Malicious Hits", mal_h)
+                s1.metric("Prior Matches", seen_result.get("total_matches", 0))
+                s2.metric("Malicious Hits", seen_result.get("malicious_hits", 0))
                 prior = seen_result.get("exact",[]) + seen_result.get("domain",[]) + seen_result.get("pattern",[])
-                if prior:
-                    for p in prior[:3]:
-                        st.markdown(f"- `{p.get('url','')}` — **{p.get('verdict','?')}** on {p.get('ts','')}")
+                for p in prior[:3]:
+                    st.markdown(f"- `{p.get('url','')}` — **{p.get('verdict','?')}** on {p.get('ts','')}")
             else:
                 st.markdown('<div class="signal-card signal-ok"><div class="signal-value">🟢 First time seeing this URL — no prior history.</div></div>', unsafe_allow_html=True)
         else:
@@ -492,16 +489,8 @@ with tab_inv:
             cd1, cd2 = st.columns(2)
             cd1.metric("Cluster Size", campaign_det.get("cluster_size", 0))
             cd2.metric("Malicious in Cluster", campaign_det.get("malicious_in_cluster", 0))
-            if campaign_det.get("top_reasons"):
-                st.markdown("**Why matched:**")
-                for r in campaign_det.get("top_reasons",[]):
-                    st.markdown(f"- {r}")
-            if campaign_det.get("related_urls"):
-                st.markdown("**Related URLs in history:**")
-                for ru in campaign_det.get("related_urls",[])[:3]:
-                    st.markdown(f"- `{ru.get('url','')}` — {ru.get('verdict','?')} on {ru.get('ts','')}")
 
-        # ── Campaign correlation
+        # ── Campaign Correlation ──────────────────────────────────────────────
         if campaign_result:
             st.markdown('<div class="sec-head">Campaign Correlation</div>', unsafe_allow_html=True)
             cc1, cc2, cc3 = st.columns(3)
@@ -512,23 +501,22 @@ with tab_inv:
                 st.markdown(f"- {sig}")
             st.info(campaign_result.get("same_campaign_hint", ""))
 
-        # ── IOC table
+        # ── IOC table ─────────────────────────────────────────────────────────
         st.markdown('<div class="sec-head">Extracted IOCs</div>', unsafe_allow_html=True)
         from urllib.parse import urlparse
         parsed = urlparse(inv_url if inv_url.startswith("http") else "https://" + inv_url)
         domain = parsed.netloc.replace("www.", "")
-        ip_hint = "Resolve via nslookup" if domain else "—"
         ioc_data = {
             "URL": inv_url,
             "Domain": domain or "—",
-            "IP": ip_hint,
+            "IP": "Resolve via nslookup",
             "Attack Type": atk_type,
             "Hash": att_hash or "—",
         }
         for k, v in ioc_data.items():
-            st.markdown(f'<span class="ioc-pill">**{k}:** {v}</span>', unsafe_allow_html=True)
+            st.markdown(f'<span class="ioc-pill"><b>{k}:</b> {v}</span>', unsafe_allow_html=True)
 
-        # ── Containment actions
+        # ── Recommended Actions ───────────────────────────────────────────────
         st.markdown('<div class="sec-head">Recommended Actions</div>', unsafe_allow_html=True)
         actions = [
             "☐  Block URL at web proxy and DNS filter",
@@ -546,14 +534,14 @@ with tab_inv:
 
         # ── Auto Escalation Pack ──────────────────────────────────────────────
         st.markdown('<div class="sec-head">📋 Auto Escalation Pack</div>', unsafe_allow_html=True)
-        esc_to = st.text_input("Escalate to (name/team)", value="L2 Analyst", key="esc_to")
+        esc_to  = st.text_input("Escalate to (name/team)", value="L2 Analyst", key="esc_to")
         esc_btn = st.button("📤 Generate Escalation Pack", key="esc_btn")
         if esc_btn:
             scan_data = {
                 "url": inv_url, "score": score, "verdict": verdict,
                 "mode": mode_label, "flags": flags,
                 "seen_before": seen_result or {},
-                "api_results": ti_result if ti_result and not isinstance(ti_result, dict) or (isinstance(ti_result, dict) and not ti_result.get("error")) else {}
+                "api_results": ti_result or {}
             }
             pack = run_escalation_pack(scan_data, analyst, esc_to, inc_id)
             if pack:
@@ -608,13 +596,22 @@ with tab_ti:
 
             st.markdown("### API Results")
             if ti_result and not ti_result.get("error"):
+                # ── VT hard override on Threat Intel tab too ─────────────────
+                vt_d = ti_result.get("virustotal", {})
+                if isinstance(vt_d, dict) and vt_d.get("malicious", 0) >= 1:
+                    vt_m = vt_d.get("malicious", 0)
+                    vt_t = vt_d.get("total", 0)
+                    color = "#ef4444" if vt_m >= 10 else "#f97316" if vt_m >= 3 else "#eab308"
+                    st.markdown(f"""
+<div style="background:#1e293b;border:1px solid {color};border-radius:8px;padding:12px;margin:8px 0">
+  <span style="color:{color};font-weight:700">🔴 VirusTotal: {vt_m}/{vt_t} vendors flagged as MALICIOUS</span>
+</div>""", unsafe_allow_html=True)
                 st.json(ti_result)
             elif ti_result and ti_result.get("error"):
                 st.warning(f"API error: {ti_result['error']}")
                 st.info("Showing offline heuristic results only.")
             else:
                 st.warning("No API keys configured. Add keys to .env for live threat intel.")
-                st.caption("Offline heuristics still work — see above.")
 
 # ── TAB 3: SHIFT HANDOFF ──────────────────────────────────────────────────────
 with tab_ho:
@@ -622,13 +619,13 @@ with tab_ho:
     st.caption("End of shift? Generate a summary your L2 or next analyst can action immediately.")
     st.divider()
 
-    ho_url  = st.text_input("Primary incident URL", key="ho_url")
-    ho_inc  = st.text_input("Incident ID", value="INC-2026-0042", key="ho_inc")
-    ho_ana  = st.text_input("Your name", value="Praharsh Kumar", key="ho_ana")
-    ho_next = st.text_input("Handoff to (next analyst)", key="ho_next")
-    ho_notes = st.text_area("Analyst notes (what you found, what's pending)", height=100, key="ho_notes")
+    ho_url    = st.text_input("Primary incident URL", key="ho_url")
+    ho_inc    = st.text_input("Incident ID", value="INC-2026-0042", key="ho_inc")
+    ho_ana    = st.text_input("Your name", value="Praharsh Kumar", key="ho_ana")
+    ho_next   = st.text_input("Handoff to (next analyst)", key="ho_next")
+    ho_notes  = st.text_area("Analyst notes (what you found, what's pending)", height=100, key="ho_notes")
     ho_status = st.selectbox("Status", ["Open", "In Progress", "Escalated to L2", "Closed — FP", "Closed — Resolved"], key="ho_status")
-    ho_btn  = st.button("Generate Handoff", type="primary", key="ho_btn")
+    ho_btn    = st.button("Generate Handoff", type="primary", key="ho_btn")
 
     if ho_btn:
         if handoff_mod and ho_url:
@@ -643,7 +640,6 @@ with tab_ho:
             except Exception as e:
                 st.error(f"Handoff engine error: {e}")
         else:
-            # Fallback: render inline handoff
             ts = datetime.now().strftime("%Y-%m-%d %H:%M IST")
             fallback = f"""# SOC Shift Handoff — {ho_inc}
 
@@ -665,7 +661,7 @@ with tab_ho:
 - [ ] Check EDR for click events
 
 ## Priority
-{'🔴 HIGH — Escalate immediately' if 'Escalated' in ho_status else '🟡 MEDIUM — Monitor' if 'In Progress' in ho_status else '🟢 LOW — Informational'}
+{"🔴 HIGH — Escalate immediately" if "Escalated" in ho_status else "🟡 MEDIUM — Monitor" if "In Progress" in ho_status else "🟢 LOW — Informational"}
 
 ---
 *Generated by PhishTriage Pro*
@@ -692,8 +688,9 @@ with tab_bulk:
             if bulk_btn:
                 results = []
                 prog = st.progress(0)
-                for i, row in df.iterrows():
-                    url = str(row["url"]).strip()
+                urls_list = df["url"].dropna().tolist()
+                for i, url in enumerate(urls_list):
+                    url = str(url).strip()
                     offline_r = run_offline(url)
                     if offline_r:
                         score   = offline_r.get("score", 0)
@@ -701,11 +698,11 @@ with tab_bulk:
                     else:
                         score, verdict = 0, "ERROR"
                     results.append({"url": url, "score": score, "verdict": verdict})
-                    prog.progress((i+1)/len(df))
+                    prog.progress((i+1)/len(urls_list))
                 result_df = pd.DataFrame(results)
                 st.dataframe(result_df, use_container_width=True)
-                csv_out = result_df.to_csv(index=False)
-                st.download_button("⬇️ Download Results", csv_out, "bulk_triage_results.csv", "text/csv")
+                st.download_button("⬇️ Download Results", result_df.to_csv(index=False),
+                                   "bulk_triage_results.csv", "text/csv")
 
 # ── TAB 5: FALSE POSITIVE ─────────────────────────────────────────────────────
 with tab_fp:
@@ -735,14 +732,15 @@ with tab_fp:
                 dom = urlparse(fp_url if fp_url.startswith("http") else "https://"+fp_url).netloc.replace("www.", "")
                 if dom and dom not in al["domains"]:
                     al["domains"].append(dom)
+                    os.makedirs("data", exist_ok=True)
                     json.dump(al, open(al_path, "w"), indent=2)
                     st.success(f"✅ `{dom}` added to allowlist.")
             except Exception as e:
                 st.warning(f"Could not update allowlist: {e}")
 
-        # Log FP
         fp_log = []
         fp_log_path = "data/fp_log.json"
+        os.makedirs("data", exist_ok=True)
         if os.path.exists(fp_log_path):
             try: fp_log = json.load(open(fp_log_path))
             except: fp_log = []
@@ -806,8 +804,8 @@ DeviceNetworkEvents
             st.download_button("⬇️ Download KQL", kql, f"query_{dom}.kql", "text/plain")
 
         if siem_type in ["Splunk (SPL)", "Both"]:
-            spl = f"""| PhishTriage Pro — SPL Query
-| Incident: {dom} | Generated: {datetime.now().strftime("%Y-%m-%d")}
+            spl = f"""// PhishTriage Pro — SPL Query
+// Incident: {dom} | Generated: {datetime.now().strftime("%Y-%m-%d")}
 
 index=email_logs earliest=-7d
 | search url="*{dom}*"
@@ -826,7 +824,7 @@ index=endpoint earliest=-7d
             st.download_button("⬇️ Download SPL", spl, f"query_{dom}.spl", "text/plain")
 
 
-# ── SCAN HISTORY (shown in sidebar) ──────────────────────────────────────────
+# ── SCAN HISTORY (sidebar) ────────────────────────────────────────────────────
 with st.sidebar:
     st.divider()
     st.markdown("### 📜 Recent Scans")
@@ -835,20 +833,18 @@ with st.sidebar:
         st.caption("No scans yet.")
     else:
         for h in reversed(history[-8:]):
-            verdict = h.get("verdict", "UNKNOWN")
-            score   = h.get("score", 0)
+            verdict   = h.get("verdict", "UNKNOWN")
+            score     = h.get("score", 0)
             url_short = h.get("url", "")[:35] + ("..." if len(h.get("url","")) > 35 else "")
-            color = "🔴" if "MALICIOUS" in verdict else "🟡" if "SUSPICIOUS" in verdict else "🟢"
+            color     = "🔴" if "MALICIOUS" in verdict else "🟡" if "SUSPICIOUS" in verdict else "🟢"
             st.markdown(f"{color} `{score}/100` — {url_short}")
             st.caption(h.get("ts", ""))
         st.divider()
         if st.button("🗑️ Clear History", key="clr_hist"):
-            import json
             json.dump([], open("scan_history.json", "w"))
             st.rerun()
 
-
-# ── HISTORY TAB embedded at bottom of page ────────────────────────────────────
+# ── FULL SCAN HISTORY ─────────────────────────────────────────────────────────
 st.divider()
 with st.expander("📜 Full Scan History", expanded=False):
     history = load_scan_history()
@@ -856,15 +852,14 @@ with st.expander("📜 Full Scan History", expanded=False):
         st.info("No scans recorded yet. Run a scan from the Investigation Pack tab.")
     else:
         import pandas as pd
-        df_hist = pd.DataFrame(reversed(history))
+        df_hist = pd.DataFrame(list(reversed(history)))
         df_hist.columns = [c.upper() for c in df_hist.columns]
         st.dataframe(df_hist, use_container_width=True, hide_index=True)
-        csv_hist = df_hist.to_csv(index=False)
-        st.download_button("⬇️ Export History CSV", csv_hist, "scan_history.csv", "text/csv")
+        st.download_button("⬇️ Export History CSV", df_hist.to_csv(index=False),
+                           "scan_history.csv", "text/csv")
         if st.button("🗑️ Clear All History", key="clr_hist_main"):
             json.dump([], open("scan_history.json", "w"))
             st.rerun()
-
 
 # ── CAMPAIGN HEATMAP ──────────────────────────────────────────────────────────
 with st.expander("📊 Campaign Heatmap — Patterns Across All Scans", expanded=False):
@@ -885,6 +880,6 @@ with st.expander("📊 Campaign Heatmap — Patterns Across All Scans", expanded
                 st.markdown(f"`{brand}` — {count}x")
         with hm3:
             st.markdown("**Verdicts breakdown**")
-            for verdict, count in heatmap.get("verdict_counts", {}).items():
-                color = "🔴" if "MALICIOUS" in verdict else "🟡" if "SUSPICIOUS" in verdict else "🟢"
-                st.markdown(f"{color} {verdict}: {count}")
+            for v, count in heatmap.get("verdict_counts", {}).items():
+                color = "🔴" if "MALICIOUS" in v else "🟡" if "SUSPICIOUS" in v else "🟢"
+                st.markdown(f"{color} {v}: {count}")
