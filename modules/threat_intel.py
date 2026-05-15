@@ -1,6 +1,6 @@
 """
 Threat Intel Engine — PhishTriage Pro
-APIs: urlscan.io, AbuseIPDB, AlienVault OTX, Google Safe Browsing
+APIs: VirusTotal, AbuseIPDB, AlienVault OTX, Google Safe Browsing, urlscan.io
 """
 
 import os, re, json, socket, time, requests
@@ -9,9 +9,7 @@ from datetime import datetime
 
 TIMEOUT = 8
 
-# ── Key loader — works on Streamlit Cloud AND local .env ─────────────────────
 def _key(name: str) -> str:
-    """Read key from Streamlit Secrets first, fallback to os.environ."""
     try:
         import streamlit as st
         val = st.secrets.get(name, "")
@@ -22,7 +20,74 @@ def _key(name: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. URLSCAN.IO
+# 1. VIRUSTOTAL  ← NEW (replaces missing VT check)
+# ─────────────────────────────────────────────────────────────────────────────
+def check_virustotal(url: str) -> dict:
+    result = {
+        "source": "VirusTotal", "available": False, "error": None,
+        "malicious": 0, "suspicious": 0, "harmless": 0, "undetected": 0,
+        "total": 0, "verdict": "Unknown", "scan_url": None,
+    }
+    key = _key("VIRUSTOTAL_API_KEY")
+    if not key:
+        result["error"] = "VIRUSTOTAL_API_KEY not set in Streamlit Secrets"
+        return result
+    try:
+        import base64
+        url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
+        headers = {"x-apikey": key}
+        r = requests.get(
+            f"https://www.virustotal.com/api/v3/urls/{url_id}",
+            headers=headers, timeout=TIMEOUT
+        )
+        if r.status_code == 404:
+            # URL not in VT cache — submit it
+            r2 = requests.post(
+                "https://www.virustotal.com/api/v3/urls",
+                headers=headers, data={"url": url}, timeout=TIMEOUT
+            )
+            if r2.status_code not in (200, 201):
+                result["error"] = f"VT submit failed: HTTP {r2.status_code}"
+                return result
+            # Wait briefly and retry once
+            time.sleep(5)
+            r = requests.get(
+                f"https://www.virustotal.com/api/v3/urls/{url_id}",
+                headers=headers, timeout=TIMEOUT
+            )
+        if r.status_code != 200:
+            result["error"] = f"HTTP {r.status_code}"
+            return result
+
+        stats = (r.json()
+                  .get("data", {})
+                  .get("attributes", {})
+                  .get("last_analysis_stats", {}))
+        mal  = stats.get("malicious", 0)
+        sus  = stats.get("suspicious", 0)
+        har  = stats.get("harmless", 0)
+        und  = stats.get("undetected", 0)
+        tot  = mal + sus + har + und
+
+        result["available"]  = True
+        result["malicious"]  = mal
+        result["suspicious"] = sus
+        result["harmless"]   = har
+        result["undetected"] = und
+        result["total"]      = tot
+        result["scan_url"]   = f"https://www.virustotal.com/gui/url/{url_id}"
+        result["verdict"]    = (
+            f"🔴 MALICIOUS — {mal}/{tot} vendors" if mal >= 3 else
+            f"🟡 SUSPICIOUS — {mal}/{tot} vendors flagged" if mal >= 1 else
+            f"🟢 Clean — 0/{tot} vendors flagged"
+        )
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. URLSCAN.IO
 # ─────────────────────────────────────────────────────────────────────────────
 def check_urlscan(url: str) -> dict:
     result = {"source": "urlscan.io", "available": False, "error": None,
@@ -62,7 +127,7 @@ def check_urlscan(url: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. ABUSEIPDB
+# 3. ABUSEIPDB
 # ─────────────────────────────────────────────────────────────────────────────
 def check_abuseipdb(ip: str) -> dict:
     result = {"source": "AbuseIPDB", "available": False, "error": None,
@@ -99,7 +164,7 @@ def check_abuseipdb(ip: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. ALIENVAULT OTX
+# 4. ALIENVAULT OTX
 # ─────────────────────────────────────────────────────────────────────────────
 def check_otx(domain: str, ip: str = None) -> dict:
     result = {"source": "AlienVault OTX", "available": False, "error": None,
@@ -138,7 +203,7 @@ def check_otx(domain: str, ip: str = None) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. GOOGLE SAFE BROWSING
+# 5. GOOGLE SAFE BROWSING
 # ─────────────────────────────────────────────────────────────────────────────
 def check_google_safe_browsing(url: str) -> dict:
     result = {"source": "Google Safe Browsing", "available": False,
@@ -175,7 +240,7 @@ def check_google_safe_browsing(url: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. OFFLINE HEURISTICS (always runs, no key needed)
+# 6. OFFLINE HEURISTICS (always runs, no key needed)
 # ─────────────────────────────────────────────────────────────────────────────
 def check_heuristics(url: str, domain: str) -> dict:
     flags  = []
@@ -257,6 +322,7 @@ def check_heuristics(url: str, domain: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def run_full_intel(url: str, ip: str, domain: str) -> dict:
     results = {
+        "virustotal": check_virustotal(url),
         "urlscan":    check_urlscan(url),
         "abuseipdb":  check_abuseipdb(ip),
         "otx":        check_otx(domain, ip),
@@ -264,7 +330,12 @@ def run_full_intel(url: str, ip: str, domain: str) -> dict:
         "heuristics": check_heuristics(url, domain),
     }
 
+    vt   = results["virustotal"]
+    vt_m = vt.get("malicious", 0) if vt.get("available") else 0
+    vt_t = vt.get("total", 0) if vt.get("available") else 0
+
     high_signals = 0
+    if vt_m >= 1:                                                        high_signals += 1
     if results["urlscan"].get("malicious"):                              high_signals += 1
     if (results["abuseipdb"].get("abuse_confidence") or 0) >= 50:       high_signals += 1
     if "Malicious" in str(results["otx"].get("verdict", "")):           high_signals += 1
@@ -273,12 +344,14 @@ def run_full_intel(url: str, ip: str, domain: str) -> dict:
 
     results["aggregate"] = {
         "high_signals":    high_signals,
-        "total_checks":    5,
+        "total_checks":    6,
+        "vt_malicious":    vt_m,
+        "vt_total":        vt_t,
         "overall_verdict": (
             "🔴 MALICIOUS — Multiple sources confirm threat" if high_signals >= 3 else
             "🟡 SUSPICIOUS — Some signals, investigate further" if high_signals >= 1 else
             "🟢 LOW RISK — No strong signals"
         ),
-        "confidence": f"{high_signals * 20}%",
+        "confidence": f"{min(high_signals * 17, 100)}%",
     }
     return results
