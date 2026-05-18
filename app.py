@@ -225,9 +225,6 @@ def save_scan(url, result):
     })
     json.dump(history, open("scan_history.json", "w"), indent=2)
 
-# ── Session state init — MUST happen before any widget renders ────────────────
-# Never set session_state[widget_key] after the widget is drawn.
-# Use default= on the widget itself OR pop() + rerun() pattern for clears.
 _DEFAULTS = {
     "inv_url": "",
     "att_hash": "",
@@ -240,7 +237,6 @@ for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### 🎯 PhishTriage Pro")
     st.caption("Full SOC phishing incident workflow")
@@ -250,7 +246,7 @@ with st.sidebar:
     st.markdown("**Tabs:**")
     st.markdown("""
 1. 🔍 Investigation Pack
-2. 🌐 Threat Intel (4 APIs)
+2. 🌐 Threat Intel (5 APIs)
 3. 📋 Shift Handoff
 4. 📊 Bulk Triage
 5. ❌ False Positive
@@ -270,8 +266,9 @@ with st.sidebar:
     ab_key  = _sidebar_key("ABUSEIPDB_API_KEY")
     ot_key  = _sidebar_key("OTX_API_KEY")
     gs_key  = _sidebar_key("GOOGLE_SAFE_BROWSING_KEY")
+    us_key  = _sidebar_key("URLSCAN_API_KEY")
 
-    has_any = any([vt_key, ab_key, ot_key, gs_key])
+    has_any = any([vt_key, ab_key, ot_key, gs_key, us_key])
     if not has_any:
         st.warning("⚠️ No API keys set in Streamlit Secrets.")
     else:
@@ -280,6 +277,7 @@ with st.sidebar:
         st.markdown(f"{'🟢' if ab_key else '🔴'} AbuseIPDB")
         st.markdown(f"{'🟢' if ot_key else '🔴'} OTX")
         st.markdown(f"{'🟢' if gs_key else '🔴'} Safe Browsing")
+        st.markdown(f"{'🟢' if us_key else '🔴'} urlscan.io")
 
     st.divider()
 
@@ -292,7 +290,6 @@ with st.sidebar:
     c1.metric("Scanned", total)
     c2.metric("Malicious", mal)
 
-# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="soc-header">
   <span style="font-size:2.2rem">🎯</span>
@@ -303,7 +300,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_inv, tab_ti, tab_ho, tab_bulk, tab_fp, tab_siem = st.tabs([
     "🔍 Investigation Pack",
     "🌐 Threat Intel",
@@ -313,7 +309,6 @@ tab_inv, tab_ti, tab_ho, tab_bulk, tab_fp, tab_siem = st.tabs([
     "🔎 SIEM Queries"
 ])
 
-# ── TAB 1: INVESTIGATION PACK ─────────────────────────────────────────────────
 with tab_inv:
     st.markdown("## 🔍 Instant Investigation Pack")
     st.caption("Paste a flagged URL → get IOCs, MITRE mapping, block rules, SIEM queries, and timeline in one click.")
@@ -363,10 +358,12 @@ with tab_inv:
         agg  = (ti_result or {}).get("aggregate", {})
         heur = (ti_result or {}).get("heuristics", {})
 
-        # ── Verdict logic — live API data always overrides offline ────────────
-        vt_data = (ti_result or {}).get("virustotal", {})
-        vt_malicious = vt_data.get("malicious", 0) if vt_data else 0
-        vt_total     = vt_data.get("total", 0) if vt_data else 0
+        vt_malicious = agg.get("vt_malicious", 0)
+        vt_total     = agg.get("vt_total", 0)
+        if vt_total == 0:
+            vt_data = (ti_result or {}).get("virustotal", {})
+            vt_malicious = vt_data.get("malicious", 0) if isinstance(vt_data, dict) else 0
+            vt_total     = vt_data.get("total", 0) if isinstance(vt_data, dict) else 0
 
         if use_api and ti_result and not ti_result.get("error"):
             h_score   = heur.get("score", 0) if heur else 0
@@ -390,7 +387,6 @@ with tab_inv:
         else:
             score, verdict, flags, mode_label = 0, "ERROR", [], "error"
 
-        # ── Hard overrides — VT vendor count cannot be ignored ────────────────
         if vt_total > 0:
             if vt_malicious >= 10:
                 score = max(score, 85)
@@ -399,7 +395,6 @@ with tab_inv:
             elif vt_malicious >= 1:
                 score = max(score, 42)
 
-        # Re-derive verdict from final score
         if score >= 70:
             verdict = "MALICIOUS"
         elif score >= 40:
@@ -426,7 +421,6 @@ with tab_inv:
 </div>
 """, unsafe_allow_html=True)
 
-        # ── Score breakdown ───────────────────────────────────────────────────
         st.markdown('<div class="sec-head">Score Breakdown</div>', unsafe_allow_html=True)
         layers = {
             "VirusTotal (35% weight)":  min(score * 1.1, 100) if score > 0 else 0,
@@ -449,13 +443,11 @@ with tab_inv:
   <div class="score-bar-wrap"><div class="score-bar-fill" style="width:{bar_pct}%; background:{bar_color}"></div></div>
 </div>""", unsafe_allow_html=True)
 
-        # ── Detection flags ───────────────────────────────────────────────────
         if flags:
             st.markdown('<div class="sec-head">Detection Signals</div>', unsafe_allow_html=True)
             for f in flags:
                 st.markdown(f'<span class="ioc-pill ioc-pill-red">🔴 {f}</span>', unsafe_allow_html=True)
 
-        # ── Seen Before ───────────────────────────────────────────────────────
         st.markdown('<div class="sec-head">🔍 Seen Before?</div>', unsafe_allow_html=True)
         if seen_result:
             if seen_result.get("seen"):
@@ -477,7 +469,6 @@ with tab_inv:
         else:
             st.caption("Seen Before module not loaded.")
 
-        # ── Campaign Detection ────────────────────────────────────────────────
         if campaign_det and campaign_det.get("campaign_detected"):
             st.markdown('<div class="sec-head">🔴 Campaign Detected</div>', unsafe_allow_html=True)
             st.markdown(f"""
@@ -490,7 +481,6 @@ with tab_inv:
             cd1.metric("Cluster Size", campaign_det.get("cluster_size", 0))
             cd2.metric("Malicious in Cluster", campaign_det.get("malicious_in_cluster", 0))
 
-        # ── Campaign Correlation ──────────────────────────────────────────────
         if campaign_result:
             st.markdown('<div class="sec-head">Campaign Correlation</div>', unsafe_allow_html=True)
             cc1, cc2, cc3 = st.columns(3)
@@ -501,7 +491,6 @@ with tab_inv:
                 st.markdown(f"- {sig}")
             st.info(campaign_result.get("same_campaign_hint", ""))
 
-        # ── IOC table ─────────────────────────────────────────────────────────
         st.markdown('<div class="sec-head">Extracted IOCs</div>', unsafe_allow_html=True)
         from urllib.parse import urlparse
         parsed = urlparse(inv_url if inv_url.startswith("http") else "https://" + inv_url)
@@ -516,7 +505,6 @@ with tab_inv:
         for k, v in ioc_data.items():
             st.markdown(f'<span class="ioc-pill"><b>{k}:</b> {v}</span>', unsafe_allow_html=True)
 
-        # ── Recommended Actions ───────────────────────────────────────────────
         st.markdown('<div class="sec-head">Recommended Actions</div>', unsafe_allow_html=True)
         actions = [
             "☐  Block URL at web proxy and DNS filter",
@@ -532,7 +520,6 @@ with tab_inv:
 
         save_scan(inv_url, {"score": score, "verdict": verdict, "mode": mode_label})
 
-        # ── Auto Escalation Pack ──────────────────────────────────────────────
         st.markdown('<div class="sec-head">📋 Auto Escalation Pack</div>', unsafe_allow_html=True)
         esc_to  = st.text_input("Escalate to (name/team)", value="L2 Analyst", key="esc_to")
         esc_btn = st.button("📤 Generate Escalation Pack", key="esc_btn")
@@ -553,7 +540,6 @@ with tab_inv:
 
         st.success("✅ Investigation pack generated. Use **Shift Handoff** tab to export.")
 
-# ── TAB 2: THREAT INTEL ───────────────────────────────────────────────────────
 with tab_ti:
     st.markdown("## 🌐 Threat Intel Enrichment")
     st.caption("Run URL against VirusTotal, AbuseIPDB, OTX, and Google Safe Browsing.")
@@ -596,11 +582,15 @@ with tab_ti:
 
             st.markdown("### API Results")
             if ti_result and not ti_result.get("error"):
-                # ── VT hard override on Threat Intel tab too ─────────────────
                 vt_d = ti_result.get("virustotal", {})
-                if isinstance(vt_d, dict) and vt_d.get("malicious", 0) >= 1:
-                    vt_m = vt_d.get("malicious", 0)
-                    vt_t = vt_d.get("total", 0)
+                if not isinstance(vt_d, dict):
+                    vt_d = {}
+                vt_m = vt_d.get("malicious", 0)
+                vt_t = vt_d.get("total", 0)
+                if vt_t == 0:
+                    vt_m = ti_result.get("aggregate", {}).get("vt_malicious", 0)
+                    vt_t = ti_result.get("aggregate", {}).get("vt_total", 0)
+                if vt_t > 0 and vt_m >= 1:
                     color = "#ef4444" if vt_m >= 10 else "#f97316" if vt_m >= 3 else "#eab308"
                     st.markdown(f"""
 <div style="background:#1e293b;border:1px solid {color};border-radius:8px;padding:12px;margin:8px 0">
@@ -613,7 +603,6 @@ with tab_ti:
             else:
                 st.warning("No API keys configured. Add keys to .env for live threat intel.")
 
-# ── TAB 3: SHIFT HANDOFF ──────────────────────────────────────────────────────
 with tab_ho:
     st.markdown("## 📋 Shift Handoff Generator")
     st.caption("End of shift? Generate a summary your L2 or next analyst can action immediately.")
@@ -669,7 +658,6 @@ with tab_ho:
             st.code(fallback, language="markdown")
             st.download_button("⬇️ Download Handoff (.md)", fallback, f"handoff_{ho_inc}.md", "text/markdown")
 
-# ── TAB 4: BULK TRIAGE ────────────────────────────────────────────────────────
 with tab_bulk:
     st.markdown("## 📊 Bulk Triage")
     st.caption("Upload a CSV with a `url` column. Triage all URLs in one pass.")
@@ -704,7 +692,6 @@ with tab_bulk:
                 st.download_button("⬇️ Download Results", result_df.to_csv(index=False),
                                    "bulk_triage_results.csv", "text/csv")
 
-# ── TAB 5: FALSE POSITIVE ─────────────────────────────────────────────────────
 with tab_fp:
     st.markdown("## ❌ False Positive Logger")
     st.caption("Mark a scan result as FP, log the reason, and update suppression rules.")
@@ -755,7 +742,6 @@ with tab_fp:
         st.success(f"✅ FP logged. {len(fp_log)} total FPs recorded.")
         st.caption("Use FP patterns to tune your detection rules over time.")
 
-# ── TAB 6: SIEM QUERIES ───────────────────────────────────────────────────────
 with tab_siem:
     st.markdown("## 🔎 SIEM Query Generator")
     st.caption("Generate ready-to-paste KQL (Sentinel) and SPL (Splunk) queries from a URL or domain.")
@@ -823,8 +809,6 @@ index=endpoint earliest=-7d
             st.code(spl, language="bash")
             st.download_button("⬇️ Download SPL", spl, f"query_{dom}.spl", "text/plain")
 
-
-# ── SCAN HISTORY (sidebar) ────────────────────────────────────────────────────
 with st.sidebar:
     st.divider()
     st.markdown("### 📜 Recent Scans")
@@ -844,7 +828,6 @@ with st.sidebar:
             json.dump([], open("scan_history.json", "w"))
             st.rerun()
 
-# ── FULL SCAN HISTORY ─────────────────────────────────────────────────────────
 st.divider()
 with st.expander("📜 Full Scan History", expanded=False):
     history = load_scan_history()
@@ -861,7 +844,6 @@ with st.expander("📜 Full Scan History", expanded=False):
             json.dump([], open("scan_history.json", "w"))
             st.rerun()
 
-# ── CAMPAIGN HEATMAP ──────────────────────────────────────────────────────────
 with st.expander("📊 Campaign Heatmap — Patterns Across All Scans", expanded=False):
     heatmap = run_heatmap()
     if not heatmap or heatmap.get("total", 0) == 0:
